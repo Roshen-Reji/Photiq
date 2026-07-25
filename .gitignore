@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Production & Build outputs
+dist/
+build/
+out/
+
+# Environment variables & Sensitive configs
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+agents/camera-agent.config.json
+
+# Local event data & agent runtime queues
+data/*
+!data/.gitkeep
+agents/runtime/*
+!agents/runtime/.gitkeep
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Editor & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+.gemini/

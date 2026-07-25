@@ -1,0 +1,8 @@
+{
+  "apiBaseUrl": "http://127.0.0.1:8787",
+  "watchDirectory": "C:\\Tethered\\Graduation",
+  "cameraName": "STAGE-CAM_01",
+  "rcloneRemote": "drive:",
+  "agentToken": "set-the-same-value-as-GRADSYNC_AGENT_TOKEN",
+  "dryRun": true
+}
