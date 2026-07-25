@@ -12,6 +12,7 @@ connectDB();
 
 const studentsRoute = require('./routes/students.cjs');
 const queueRoute = require('./routes/queue.cjs');
+const uploadsRoute = require('./routes/uploads.cjs');
 
 const port = Number(process.env.PORT || 8787);
 const rcloneRemote = process.env.GRADSYNC_RCLONE_REMOTE || '';
@@ -27,6 +28,7 @@ app.use(express.json({ limit: '12mb' }));
 // API Routes
 app.use('/api/students', studentsRoute);
 app.use('/api/queue', queueRoute);
+app.use('/api/uploads', uploadsRoute);
 
 // Simple health endpoint
 app.get('/api/health', (req, res) => res.json({ ok: true, db: 'mongodb' }));

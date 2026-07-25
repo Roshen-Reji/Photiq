@@ -65,12 +65,34 @@ async function processQueue() {
   busy = true;
   const job = queue[0];
   try {
-    const event = await api('/api/event');
-    if (!event.activeStudentId) throw new Error('No active student has been selected by the monitor.');
-    const intent = await api('/api/upload-intent', { method: 'POST', body: JSON.stringify({ studentId: event.activeStudentId, source: 'stage', filename: job.filename, camera: config.cameraName, localPath: job.filePath }) });
+    // 1. Fetch the active student from the new queue API
+    const activeStudent = await api('/api/queue/active');
+    if (!activeStudent || !activeStudent.student_id) {
+      throw new Error('No active student has been selected by the monitor.');
+    }
+    
+    // 2. Request an upload intent
+    const intent = await api('/api/uploads/intent', { 
+      method: 'POST', 
+      body: JSON.stringify({ 
+        studentId: activeStudent.student_id, 
+        source: 'stage', 
+        filename: job.filename, 
+        camera: config.cameraName, 
+        localPath: job.filePath 
+      }) 
+    });
+    
+    // 3. Execute rclone
     await runRclone(job.filePath, intent.rcloneDestination);
-    await api(`/api/uploads/${intent.uploadId}/completed`, { method: 'POST', body: JSON.stringify({ completed: true }) });
-    console.log(`Uploaded ${job.filename} for ${event.activeStudentId}`);
+    
+    // 4. Mark as completed
+    await api(`/api/uploads/${intent.uploadId}/completed`, { 
+      method: 'POST', 
+      body: JSON.stringify({ completed: true }) 
+    });
+    
+    console.log(`Uploaded ${job.filename} for ${activeStudent.student_id}`);
     queue.shift();
   } catch (error) {
     job.attempts += 1;

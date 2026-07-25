@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const Student = require('../models/Student.cjs');
+const rclone = require('../controllers/rclone.cjs');
 
 // Get active student
 router.get('/active', async (req, res) => {
@@ -29,10 +30,14 @@ router.post('/active', async (req, res) => {
     
     if (!student) return res.status(404).json({ error: 'Student not found' });
     
-    // Trigger folder creation logic here if needed, or rely on a webhook/agent
+    const io = req.app.get('io');
+    
+    // Trigger RClone folder creation in the background
+    rclone.createStudentFolder(student, io).catch(err => {
+      console.error('Background folder creation failed:', err);
+    });
     
     // Emit socket event to all connected clients
-    const io = req.app.get('io');
     if (io) {
       io.emit('state_update', student);
     }
