@@ -18,11 +18,16 @@
   "type": "commonjs",
   "dependencies": {
     "chokidar": "^5.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "jsqr": "^1.4.0",
     "lucide-react": "^1.26.0",
+    "mongoose": "^9.8.0",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3"
   },
