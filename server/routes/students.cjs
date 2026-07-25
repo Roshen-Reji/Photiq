@@ -91,12 +91,14 @@ router.delete('/:studentId', async (req, res) => {
 // Update student details
 router.patch('/:studentId', async (req, res) => {
   try {
-    const { name, department } = req.body;
+    const { name, department, physical_qr, id } = req.body;
     const student = await Student.findOne({ student_id: req.params.studentId });
     if (!student) return res.status(404).json({ error: 'Student not found' });
     
     if (name) student.name = name;
-    if (department) student.department = department;
+    if (department !== undefined) student.department = department; // department can be empty
+    if (physical_qr !== undefined) student.physical_qr = physical_qr;
+    if (id && id !== student.student_id) student.student_id = id;
     
     await student.save();
     res.json(student);
