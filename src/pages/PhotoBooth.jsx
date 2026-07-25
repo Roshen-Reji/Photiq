@@ -84,22 +84,58 @@ export default function PhotoBooth() {
     };
   }, [scanning]);
 
+  useEffect(() => {
+    fetchBoothSession();
+  }, []);
+
+  const fetchBoothSession = async () => {
+    try {
+      const res = await fetch('/api/booth/active');
+      const data = await res.json();
+      setScannedStudents(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const syncBoothSession = async (studentsList) => {
+    try {
+      await fetch('/api/booth/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentIds: studentsList.map(s => s.student_id) })
+      });
+      setScannedStudents(studentsList);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   const handleAddStudent = async (id) => {
     if (!id || scannedStudents.find(s => s.student_id === id)) return;
     
     try {
-      // In production, fetch student details from API to get name/dept
-      // For now, we mock the fetch or rely on active student state
       const newStudent = { student_id: id, name: activeStudent?.student_id === id ? activeStudent.name : 'Scanned User', department: 'QR Scan' };
-      setScannedStudents(prev => [...prev, newStudent]);
+      const newList = [...scannedStudents, newStudent];
+      await syncBoothSession(newList);
       setManualInput('');
     } catch(err) {
       console.error(err);
     }
   };
 
-  const handleRemove = (id) => {
-    setScannedStudents(prev => prev.filter(s => s.student_id !== id));
+  const handleRemove = async (id) => {
+    const newList = scannedStudents.filter(s => s.student_id !== id);
+    await syncBoothSession(newList);
+  };
+
+  const handleClearSession = async () => {
+    try {
+      await fetch('/api/booth/clear', { method: 'POST' });
+      setScannedStudents([]);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   // Add the active student automatically if they just got on stage and aren't scanned yet
@@ -198,8 +234,8 @@ export default function PhotoBooth() {
             <button onClick={() => handleAddStudent(manualInput)}><Plus size={14} /></button>
           </div>
 
-          <button className="take-photo" disabled={scannedStudents.length === 0}>
-            <i className="shutter"></i> CAPTURE IDENTITIES <kbd>SPACE</kbd>
+          <button className="take-photo" onClick={handleClearSession} disabled={scannedStudents.length === 0} style={{ background: '#e8542e', border: 'none', color: '#fff' }}>
+            <i className="shutter"></i> CLEAR SESSION
           </button>
           
           <p className="privacy-note">Photos synced securely to Drive.</p>

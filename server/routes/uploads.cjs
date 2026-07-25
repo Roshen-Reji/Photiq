@@ -32,6 +32,15 @@ router.post('/intent', async (req, res) => {
 
     await upload.save();
 
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('agent_status', {
+        id: camera || 'STAGE_CAM_A',
+        time: new Date().toLocaleTimeString(),
+        file: filename
+      });
+    }
+
     res.json({
       uploadId: upload._id,
       rcloneDestination

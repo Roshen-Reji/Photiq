@@ -1,33 +1,31 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
-  Wifi, 
-  Activity, 
-  Server, 
-  Search, 
-  Upload, 
-  MoreHorizontal, 
-  Play,
-  Pause,
-  FastForward,
-  Settings,
-  HardDrive
+  Wifi, Activity, Server, Search, Upload, MoreHorizontal, 
+  Play, Pause, FastForward, Settings, HardDrive 
 } from 'lucide-react';
 
 export default function MonitorDashboard() {
   const [students, setStudents] = useState([]);
   const [activeStudent, setActiveStudent] = useState(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [queuePaused, setQueuePaused] = useState(false);
+  
+  const [logs, setLogs] = useState([{ time: new Date().toLocaleTimeString(), level: 'ok', message: 'SYSTEM INITIALIZED.' }]);
+  const [agents, setAgents] = useState({});
+
+  // Drag and drop state
+  const dragItem = useRef();
+  const dragOverItem = useRef();
 
   useEffect(() => {
-    // Initial fetch
     fetch('/api/students')
       .then(res => res.json())
       .then(data => setStudents(data))
       .catch(err => console.error(err));
 
-    // Setup Socket
     const socket = io(window.location.origin.includes('localhost') ? 'http://localhost:8787' : '/');
     
     socket.on('connect', () => {
@@ -43,10 +41,19 @@ export default function MonitorDashboard() {
       setActiveStudent(student);
     });
 
+    socket.on('system_log', (log) => {
+      setLogs(prev => [log, ...prev].slice(0, 50));
+    });
+
+    socket.on('agent_status', (agent) => {
+      setAgents(prev => ({ ...prev, [agent.id]: { ...agent, online: true, lastSeen: Date.now() } }));
+    });
+
     return () => socket.disconnect();
   }, []);
 
   const handleNext = async (id) => {
+    if (queuePaused) return; // Prevent advancing if paused
     const res = await fetch('/api/queue/active', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -55,6 +62,58 @@ export default function MonitorDashboard() {
     const updated = await res.json();
     setActiveStudent(updated);
   };
+
+  const advanceQueue = (direction) => {
+    if (!students.length) return;
+    if (!activeStudent) {
+      handleNext(students[0].student_id);
+      return;
+    }
+    const currentIndex = students.findIndex(s => s.student_id === activeStudent.student_id);
+    let targetIndex = currentIndex + direction;
+    if (targetIndex < 0) targetIndex = 0;
+    if (targetIndex >= students.length) targetIndex = students.length - 1;
+    
+    if (targetIndex !== currentIndex) {
+      handleNext(students[targetIndex].student_id);
+    }
+  };
+
+  // Drag and Drop Handlers
+  const handleDragStart = (e, index) => {
+    dragItem.current = index;
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleDragEnter = (e, index) => {
+    dragOverItem.current = index;
+  };
+
+  const handleDrop = async (e) => {
+    if (searchQuery) return; // Disable reorder while searching
+    if (dragItem.current !== null && dragOverItem.current !== null) {
+      const newList = [...students];
+      const draggedItemContent = newList[dragItem.current];
+      newList.splice(dragItem.current, 1);
+      newList.splice(dragOverItem.current, 0, draggedItemContent);
+      dragItem.current = null;
+      dragOverItem.current = null;
+      setStudents(newList);
+
+      // Save to backend
+      const studentIds = newList.map(s => s.student_id);
+      await fetch('/api/queue/reorder', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentIds })
+      });
+    }
+  };
+
+  const filteredStudents = students.filter(s => 
+    s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    s.student_id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
 
   return (
     <div className="monitor-app">
@@ -82,7 +141,9 @@ export default function MonitorDashboard() {
         </div>
         <div className="title-actions">
           <button className="ghost-control"><Server size={12}/> DB STATUS</button>
-          <button className="accent-control">[ EMER_HALT ]</button>
+          <button className="accent-control" onClick={() => setQueuePaused(!queuePaused)}>
+            {queuePaused ? '[ RESUME_QUEUE ]' : '[ EMER_HALT ]'}
+          </button>
         </div>
       </div>
 
@@ -96,27 +157,37 @@ export default function MonitorDashboard() {
           
           <div className="search-box">
             <Search size={12} />
-            <input type="text" placeholder="QUERY STUDENT_ID OR NAME..." />
+            <input 
+              type="text" 
+              placeholder="QUERY STUDENT_ID OR NAME..." 
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
             <kbd>ESC</kbd>
           </div>
 
           <div className="queue-tools">
             <button>[EDIT]</button>
             <button>[DEL]</button>
-            <label className="upload-inline">
-              <Upload size={10} /> IMPORT.CSV
-              <input type="file" />
+            <label className="upload-inline" onClick={() => window.location.href = '/admin'}>
+              <Settings size={10} /> ADMIN_PANEL
             </label>
           </div>
 
           <div className="queue-scroll">
-            {students.map((s, idx) => (
+            {filteredStudents.map((s, idx) => (
               <div 
                 key={s.student_id} 
                 className={`queue-item ${activeStudent?.student_id === s.student_id ? 'active' : ''}`}
                 onClick={() => handleNext(s.student_id)}
+                draggable={!searchQuery}
+                onDragStart={(e) => handleDragStart(e, idx)}
+                onDragEnter={(e) => handleDragEnter(e, idx)}
+                onDragEnd={handleDrop}
+                onDragOver={(e) => e.preventDefault()}
+                style={{ cursor: searchQuery ? 'pointer' : 'grab' }}
               >
-                <div className="drag-marks">|||</div>
+                <div className="drag-marks" style={{ cursor: 'grab' }}>|||</div>
                 <span className="queue-number">{(idx + 1).toString().padStart(2, '0')}</span>
                 <div className="student-label">
                   <strong>{s.name.toUpperCase()}</strong>
@@ -131,7 +202,7 @@ export default function MonitorDashboard() {
           
           <div className="queue-footer">
             <button>[ + ADD NODE ]</button>
-            <span>SYNC_RATE: 12ms</span>
+            <span>SYNC_RATE: {socketConnected ? '12ms' : 'ERR'}</span>
           </div>
         </section>
 
@@ -146,8 +217,8 @@ export default function MonitorDashboard() {
 
           <div className="active-main">
             <div className="active-meta">
-              <span>R_POS: <em>01</em></span>
-              <span>AUTO_MODE: <em>ON</em></span>
+              <span>R_POS: <em>{activeStudent ? students.findIndex(s => s.student_id === activeStudent.student_id) + 1 : '00'}</em></span>
+              <span>AUTO_MODE: <em>{queuePaused ? 'PAUSED' : 'ON'}</em></span>
             </div>
 
             {activeStudent ? (
@@ -160,7 +231,7 @@ export default function MonitorDashboard() {
                 <div className="active-data-row">
                   <div>
                     <span>FOLDER TARGET</span>
-                    <strong className="success-text">/{activeStudent.student_id}_{activeStudent.name.replace(/\s+/g, '')}</strong>
+                    <strong className="success-text">/{activeStudent.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_{activeStudent.student_id}</strong>
                   </div>
                   <div>
                     <span>FILE COUNT</span>
@@ -180,8 +251,8 @@ export default function MonitorDashboard() {
                   <div className="qr-copy">
                     <p>DIGITAL IDENTIFIER</p>
                     <strong>READY</strong>
-                    <span>Physical QR override available. Tap to assign static marker.</span>
-                    <button>[ ASSIGN_PHYSICAL ]</button>
+                    <span>{activeStudent.physical_qr ? `PHYSICAL QR MAPPED: ${activeStudent.physical_qr}` : 'Physical QR override available. Tap to assign static marker.'}</span>
+                    <button onClick={() => window.location.href = '/admin'}>[ ADMIN_ASSIGN ]</button>
                   </div>
                 </div>
               </>
@@ -194,12 +265,14 @@ export default function MonitorDashboard() {
           </div>
 
           <div className="active-controls">
-            <button className="prev-next"><Play size={10} style={{transform: 'rotate(180deg)'}}/> PREV</button>
-            <button className="pause-control"><Pause size={10}/> PAUSE QUEUE</button>
-            <button className="next-control" onClick={() => {
-               // Jump to next in list conceptually
-               if (students.length > 0) handleNext(students[0].student_id)
-            }}>
+            <button className="prev-next" onClick={() => advanceQueue(-1)}>
+              <Play size={10} style={{transform: 'rotate(180deg)'}}/> PREV
+            </button>
+            <button className="pause-control" onClick={() => setQueuePaused(!queuePaused)}>
+              {queuePaused ? <Play size={10}/> : <Pause size={10}/>} 
+              {queuePaused ? 'RESUME QUEUE' : 'PAUSE QUEUE'}
+            </button>
+            <button className="next-control" onClick={() => advanceQueue(1)}>
               NEXT NODE <FastForward size={10}/>
             </button>
           </div>
@@ -211,40 +284,41 @@ export default function MonitorDashboard() {
 
         {/* RIGHT COLUMN: SYSTEM & AGENTS */}
         <div className="system-column">
-          <section className="panel-frame system-panel">
+          <section className="panel-frame system-panel" style={{ flex: '1', display: 'flex', flexDirection: 'column' }}>
             <div className="panel-heading">
               <span>[SYSTEM_LOG]</span>
             </div>
-            <div className="logs">
-              <div className="log active">
-                <time>14:02:11</time>
-                <span>&gt;</span>
-                <p>SYSTEM INITIALIZED.</p>
-              </div>
-              {activeStudent && (
-                <div className="log ok">
-                  <time>14:03:45</time>
+            <div className="logs" style={{ overflowY: 'auto', flex: 1, maxHeight: '250px' }}>
+              {logs.map((log, i) => (
+                <div key={i} className={`log ${log.level}`}>
+                  <time>{log.time}</time>
                   <span>&gt;</span>
-                  <p>FOLDER ALLOCATED: {activeStudent.student_id}</p>
+                  <p>{log.message}</p>
                 </div>
-              )}
+              ))}
             </div>
-            <button className="all-logs">[ VIEW_ALL ]</button>
+            <button className="all-logs" onClick={() => setLogs([])}>[ CLEAR_LOGS ]</button>
           </section>
 
-          <section className="panel-frame agents-panel">
+          <section className="panel-frame agents-panel" style={{ flex: 'none', height: 'auto', minHeight: '130px' }}>
             <div className="panel-heading">
               <span>[TETHER_AGENTS]</span>
-              <span className="muted-small">1 ONLINE</span>
+              <span className="muted-small">{Object.keys(agents).length} ONLINE</span>
             </div>
-            <div className="agent-row">
-              <i className="agent-led"></i>
-              <div>
-                <strong>STAGE_CAM_A</strong>
-                <small>192.168.1.104</small>
-              </div>
-              <span className="agent-size">0B/s</span>
-            </div>
+            {Object.values(agents).length === 0 ? (
+              <div style={{ padding: '20px 14px', fontSize: '10px', color: '#777' }}>NO AGENTS DETECTED</div>
+            ) : (
+              Object.values(agents).map(agent => (
+                <div key={agent.id} className="agent-row">
+                  <i className="agent-led" style={{ background: agent.online ? '#75dba6' : '#555', boxShadow: agent.online ? '0 0 9px #75dba6' : 'none' }}></i>
+                  <div>
+                    <strong>{agent.id}</strong>
+                    <small>LAST SYNC: {agent.file}</small>
+                  </div>
+                  <span className="agent-size">ONLINE</span>
+                </div>
+              ))
+            )}
             <div className="agent-bottom">
               <span>PING: 14ms</span>
               <span>[ RESTART ]</span>
@@ -260,7 +334,7 @@ export default function MonitorDashboard() {
             <div className="drive-state">
               <span>ONLINE</span>
               <div>
-                <strong>14.2 GB</strong>
+                <strong>N/A GB</strong>
                 <small>FREE SPACE</small>
               </div>
             </div>
