@@ -9,6 +9,7 @@
     "start": "node server/index.cjs",
     "local": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npm run dev\"",
     "agent:camera": "node agents/camera-upload-agent.cjs",
+    "setup:prod": "node scripts/setup.cjs",
     "build": "vite build",
     "preview": "vite preview"
   },
