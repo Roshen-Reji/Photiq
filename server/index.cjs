@@ -31,10 +31,27 @@ app.use('/api/queue', queueRoute);
 // Simple health endpoint
 app.get('/api/health', (req, res) => res.json({ ok: true, db: 'mongodb' }));
 
+// Attach IO to app for routes to use
+app.set('io', io);
+
 // Sockets
 io.on('connection', (socket) => {
-  console.log('Client connected');
-  // Handle socket connections for realtime updates
+  console.log(`Client connected: ${socket.id}`);
+  
+  // Clients can ask for current state immediately upon connecting
+  socket.on('request_state', async () => {
+    try {
+      const Student = require('./models/Student.cjs');
+      const activeStudent = await Student.findOne({ status: 'active' });
+      socket.emit('state_update', activeStudent);
+    } catch (err) {
+      console.error('Socket state fetch error:', err);
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`Client disconnected: ${socket.id}`);
+  });
 });
 
 async function boot() {

@@ -31,6 +31,12 @@ router.post('/active', async (req, res) => {
     
     // Trigger folder creation logic here if needed, or rely on a webhook/agent
     
+    // Emit socket event to all connected clients
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('state_update', student);
+    }
+    
     res.json(student);
   } catch (err) {
     res.status(500).json({ error: err.message });

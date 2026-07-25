@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import { io } from 'socket.io-client';
+import { QRCodeSVG } from 'qrcode.react';
 import { 
   Wifi, 
   Activity, 
@@ -16,17 +18,32 @@ import {
 export default function MonitorDashboard() {
   const [students, setStudents] = useState([]);
   const [activeStudent, setActiveStudent] = useState(null);
+  const [socketConnected, setSocketConnected] = useState(false);
 
   useEffect(() => {
+    // Initial fetch
     fetch('/api/students')
       .then(res => res.json())
       .then(data => setStudents(data))
       .catch(err => console.error(err));
-      
-    fetch('/api/queue/active')
-      .then(res => res.json())
-      .then(data => setActiveStudent(data))
-      .catch(err => console.error(err));
+
+    // Setup Socket
+    const socket = io(window.location.origin.includes('localhost') ? 'http://localhost:8787' : '/');
+    
+    socket.on('connect', () => {
+      setSocketConnected(true);
+      socket.emit('request_state');
+    });
+
+    socket.on('disconnect', () => {
+      setSocketConnected(false);
+    });
+
+    socket.on('state_update', (student) => {
+      setActiveStudent(student);
+    });
+
+    return () => socket.disconnect();
   }, []);
 
   const handleNext = async (id) => {
@@ -48,8 +65,9 @@ export default function MonitorDashboard() {
           <small>V 1.0.4 - SECURE</small>
         </div>
         <div className="header-actions">
-          <span className="header-status">
-            <i className="live-dot"></i> SYSTEM LIVE
+          <span className="header-status" style={{ color: socketConnected ? '#a6a9a3' : '#f05825' }}>
+            <i className="live-dot" style={{ background: socketConnected ? '#f05825' : '#555', boxShadow: socketConnected ? '0 0 10px #f05825' : 'none' }}></i> 
+            {socketConnected ? 'SYSTEM LIVE' : 'DISCONNECTED'}
           </span>
           <div className="header-divider"></div>
           <button className="header-link"><Activity size={10} /> DIAGNOSTICS</button>
@@ -152,8 +170,12 @@ export default function MonitorDashboard() {
 
                 <div className="qr-zone">
                   <div className="qr-shell">
-                    {/* Placeholder for QR Code */}
-                    <div style={{ width: '132px', height: '132px', background: '#000' }}></div>
+                    <QRCodeSVG 
+                      value={`{"id":"${activeStudent.student_id}","t":"${Date.now()}"}`} 
+                      size={132} 
+                      level="L" 
+                      includeMargin={false} 
+                    />
                   </div>
                   <div className="qr-copy">
                     <p>DIGITAL IDENTIFIER</p>
