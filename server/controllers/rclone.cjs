@@ -73,6 +73,55 @@ class RCloneService {
       });
     });
   }
+  listStudentPhotos(student) {
+    return new Promise((resolve, reject) => {
+      if (this.dryRun) {
+        return resolve([{ Path: 'mock_stage_01.jpg', Size: 4500000, MimeType: 'image/jpeg' }]);
+      }
+      const folderName = this.getFolderName(student);
+      const destination = `${this.remote}/${folderName}`;
+      
+      const child = spawn('rclone', ['lsjson', destination], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let output = '';
+      
+      child.stdout.on('data', (data) => output += data.toString());
+      
+      child.on('exit', (code) => {
+        if (code === 0) {
+          try {
+            const files = JSON.parse(output);
+            resolve(files.filter(f => !f.IsDir));
+          } catch(e) {
+            resolve([]);
+          }
+        } else {
+          // If folder doesn't exist, rclone might exit with error, just return empty
+          resolve([]);
+        }
+      });
+    });
+  }
+
+  streamPhoto(student, filename, res) {
+    if (this.dryRun) {
+      res.status(404).send('Not found in dry run');
+      return;
+    }
+    const folderName = this.getFolderName(student);
+    const destination = `${this.remote}/${folderName}/${filename}`;
+    
+    const child = spawn('rclone', ['cat', destination]);
+    
+    child.stdout.pipe(res);
+    
+    child.stderr.on('data', (data) => {
+      console.error(`[RClone Cat Error]: ${data}`);
+    });
+    
+    child.on('error', (err) => {
+      if (!res.headersSent) res.status(500).end();
+    });
+  }
 }
 
 module.exports = new RCloneService();

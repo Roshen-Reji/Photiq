@@ -1,20 +1,53 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Download, Share2, Grid } from 'lucide-react';
 
 export default function StudentPortal() {
   const { token } = useParams();
+  const [photos, setPhotos] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  // Mock data for the portal
-  const photos = [
-    { id: '1', style: 'gold tall' },
-    { id: '2', style: 'violet wide' },
-    { id: '3', style: 'coral' },
-    { id: '4', style: 'blue' },
-    { id: '5', style: 'forest tall' },
-    { id: '6', style: 'plum' },
-    { id: '7', style: 'sunset wide' },
-  ];
+  useEffect(() => {
+    fetchPhotos();
+  }, [token]);
+
+  const fetchPhotos = async () => {
+    try {
+      setLoading(true);
+      const res = await fetch(`/api/drive/${token}/photos`);
+      if (!res.ok) throw new Error('Failed to load photos or student not found.');
+      const data = await res.json();
+      
+      // Assign random styles to photos for the masonry grid look
+      const styles = ['gold tall', 'violet wide', 'coral', 'blue', 'forest tall', 'plum', 'sunset wide'];
+      const processed = data.map((photo, i) => ({
+        ...photo,
+        style: styles[i % styles.length]
+      }));
+      
+      setPhotos(processed);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDownloadAll = () => {
+    window.location.href = `/api/drive/${token}/download`;
+  };
+
+  const handleDownloadSingle = (filename) => {
+    // Open the stream in a new tab to prompt download (or use an invisible anchor)
+    const link = document.createElement('a');
+    link.href = `/api/drive/${token}/photo/${filename}`;
+    link.download = filename;
+    link.target = '_blank';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   return (
     <div className="portal-app">
@@ -34,25 +67,27 @@ export default function StudentPortal() {
             <h1><i>Your</i><br/>Moments.</h1>
             <p>Welcome to your personal graduation gallery. High-resolution downloads are included.</p>
           </div>
-          <button className="download-all">
+          <button className="download-all" onClick={handleDownloadAll} disabled={photos.length === 0 || loading}>
             <Download size={12} />
             DOWNLOAD ALL <span>(ZIP)</span>
           </button>
         </div>
 
         <div className="gallery-meta">
-          <span>{photos.length} ITEMS FOUND</span>
+          <span>{loading ? 'LOADING...' : `${photos.length} ITEMS FOUND`}</span>
           <span><i className="gallery-live"></i> SYNCING LIVE</span>
         </div>
+        
+        {error && <div style={{ color: '#e8542e', padding: '20px' }}>{error}</div>}
 
         <div className="photo-grid">
-          {photos.map(p => (
-            <figure key={p.id} className={`gallery-card ${p.style}`}>
+          {photos.map((p, i) => (
+            <figure key={i} className={`gallery-card ${p.style}`} style={{ backgroundImage: `url(/api/drive/${token}/photo/${p.Path})`, backgroundSize: 'cover', backgroundPosition: 'center' }}>
               <div className="image-grain"></div>
               <figcaption>
-                <span>ID_00{p.id}</span>
-                <strong>DSLR_RAW</strong>
-                <button><Download size={14} /></button>
+                <span>{p.Path}</span>
+                <strong>{(p.Size / 1024 / 1024).toFixed(1)} MB</strong>
+                <button onClick={() => handleDownloadSingle(p.Path)}><Download size={14} /></button>
               </figcaption>
             </figure>
           ))}

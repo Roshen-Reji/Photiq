@@ -14,6 +14,7 @@ const studentsRoute = require('./routes/students.cjs');
 const queueRoute = require('./routes/queue.cjs');
 const uploadsRoute = require('./routes/uploads.cjs');
 const boothRoute = require('./routes/booth.cjs');
+const driveRoute = require('./routes/drive.cjs');
 
 const port = Number(process.env.PORT || 8787);
 const rcloneRemote = process.env.GRADSYNC_RCLONE_REMOTE || '';
@@ -31,6 +32,7 @@ app.use('/api/students', studentsRoute);
 app.use('/api/queue', queueRoute);
 app.use('/api/uploads', uploadsRoute);
 app.use('/api/booth', boothRoute);
+app.use('/api/drive', driveRoute);
 
 // Simple health endpoint
 app.get('/api/health', (req, res) => res.json({ ok: true, db: 'mongodb' }));
