@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   Wifi, Activity, Server, Search, Upload, MoreHorizontal, 
-  Play, Pause, FastForward, Settings, HardDrive 
+  Play, Pause, FastForward, Settings, HardDrive, Home 
 } from 'lucide-react';
 
 export default function MonitorDashboard() {
@@ -129,8 +130,9 @@ export default function MonitorDashboard() {
             {socketConnected ? 'SYSTEM LIVE' : 'DISCONNECTED'}
           </span>
           <div className="header-divider"></div>
-          <button className="header-link"><Activity size={10} /> DIAGNOSTICS</button>
-          <button className="header-icon"><Settings size={14} /></button>
+          <Link to="/">
+            <button className="header-link"><Home size={10} /> LAUNCHPAD</button>
+          </Link>
         </div>
       </header>
 
@@ -140,7 +142,9 @@ export default function MonitorDashboard() {
           <h1>CEREMONY CONTROL</h1>
         </div>
         <div className="title-actions">
-          <button className="ghost-control"><Server size={12}/> DB STATUS</button>
+          <button className="ghost-control" disabled={!activeStudent} onClick={() => activeStudent && window.open(`/s/${activeStudent.student_id}`, '_blank')}>
+            [ PORTAL ]
+          </button>
           <button className="accent-control" onClick={() => setQueuePaused(!queuePaused)}>
             {queuePaused ? '[ RESUME_QUEUE ]' : '[ EMER_HALT ]'}
           </button>
@@ -167,10 +171,8 @@ export default function MonitorDashboard() {
           </div>
 
           <div className="queue-tools">
-            <button>[EDIT]</button>
-            <button>[DEL]</button>
-            <label className="upload-inline" onClick={() => window.location.href = '/admin'}>
-              <Settings size={10} /> ADMIN_PANEL
+            <label className="upload-inline" onClick={() => window.location.href = '/'}>
+              <Settings size={10} /> LAUNCHPAD
             </label>
           </div>
 

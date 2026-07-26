@@ -54,9 +54,7 @@ export default function StudentPortal() {
       <header className="gallery-header">
         <button className="wordmark">Grad<span>Sync</span></button>
         <nav className="gallery-nav">
-          <button>YOUR GALLERY</button>
-          <button>PRINT STORE</button>
-          <button>HELP</button>
+          <button style={{ color: '#fff', borderBottom: '1px solid #fff', paddingBottom: '2px' }}>YOUR GALLERY</button>
         </nav>
       </header>
 

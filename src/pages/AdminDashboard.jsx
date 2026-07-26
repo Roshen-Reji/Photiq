@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { Link } from 'react-router-dom';
 import { read, utils } from 'xlsx';
 import jsQR from 'jsqr';
-import { Upload, Plus, Trash2, Edit2, Server, Search, Camera, CameraOff, Link2 } from 'lucide-react';
+import { Upload, Plus, Trash2, Edit2, Server, Search, Camera, CameraOff, Link2, Home } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [students, setStudents] = useState([]);
@@ -189,7 +190,9 @@ export default function AdminDashboard() {
             <i className="live-dot"></i> DB CONNECTED
           </span>
           <div className="header-divider"></div>
-          <button className="header-link"><Server size={10} /> DB STATUS</button>
+          <Link to="/">
+            <button className="header-link"><Home size={10} /> LAUNCHPAD</button>
+          </Link>
         </div>
       </header>
 

@@ -1,7 +1,8 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import jsQR from 'jsqr';
-import { Camera, X, Plus } from 'lucide-react';
+import { Camera, X, Plus, Home } from 'lucide-react';
 
 export default function PhotoBooth() {
   const videoRef = useRef(null);
@@ -64,13 +65,10 @@ export default function PhotoBooth() {
         });
         
         if (code) {
-          try {
-            const data = JSON.parse(code.data);
-            if (data.id) handleAddStudent(data.id);
-          } catch(e) {
-            // Not a JSON QR, just use raw string
-            handleAddStudent(code.data);
-          }
+          handleAddStudent(code.data);
+          // Pause scanning briefly
+          setScanning(false);
+          setTimeout(() => setScanning(true), 1500);
         }
       }
       if (scanning) {
@@ -79,8 +77,12 @@ export default function PhotoBooth() {
     };
 
     return () => {
-      if (streamObj) streamObj.getTracks().forEach(t => t.stop());
-      if (scanFrame) cancelAnimationFrame(scanFrame);
+      if (streamObj) {
+        streamObj.getTracks().forEach(t => t.stop());
+      }
+      if (scanFrame) {
+        cancelAnimationFrame(scanFrame);
+      }
     };
   }, [scanning]);
 
@@ -138,20 +140,22 @@ export default function PhotoBooth() {
     }
   };
 
-  // Add the active student automatically if they just got on stage and aren't scanned yet
-  useEffect(() => {
-    if (activeStudent && !scannedStudents.find(s => s.student_id === activeStudent.student_id)) {
-       handleAddStudent(activeStudent.student_id);
-    }
-  }, [activeStudent]);
+  // Removed auto-add of active student to photo booth to prevent stage users from appearing automatically.
 
   return (
     <div className="portal-app">
       <header className="portal-header">
         <button className="wordmark">Grad<span>Sync</span></button>
-        <div className="kiosk-chip">
-          <span style={{ background: socketConnected ? '#6eae82' : '#e8542e' }}></span> 
-          KIOSK_01 ACTIVE
+        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+          <div className="kiosk-chip">
+            <span style={{ background: socketConnected ? '#6eae82' : '#e8542e' }}></span> 
+            KIOSK_01 ACTIVE
+          </div>
+          <Link to="/">
+            <button className="header-link" style={{ background: 'transparent', border: '1px solid #3b3e3a', color: '#aeb4aa', padding: '6px 12px', cursor: 'pointer', fontSize: '10px' }}>
+              <Home size={10} style={{ display: 'inline', marginRight: '4px' }} /> LAUNCHPAD
+            </button>
+          </Link>
         </div>
       </header>
 
