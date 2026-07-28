@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { Monitor, Users, Camera, Terminal, ShieldAlert, FileText } from 'lucide-react';
+import { Monitor, Users, Camera, Terminal, ShieldAlert, FileText, User } from 'lucide-react';
 
 export default function Home() {
   return (
@@ -40,6 +40,16 @@ export default function Home() {
               <Camera size={32} color="#f05825" style={{ marginBottom: '15px', display: 'inline-block' }} />
               <h2 style={{ color: '#f1f0ea', fontSize: '14px', marginBottom: '8px', letterSpacing: '1px' }}>PHOTO BOOTH</h2>
               <p style={{ color: '#93988f', fontSize: '11px', lineHeight: '1.4', margin: 0 }}>Track scanned QR groups for automated multi-sync uploading of DSLR images.</p>
+            </div>
+          </Link>
+
+          <Link to="/student" style={{ textDecoration: 'none' }}>
+            <div className="panel-frame" style={{ padding: '30px 20px', textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s', border: '1px solid #3b3e3a', height: '100%' }}
+                 onMouseOver={e => e.currentTarget.style.borderColor = '#f05825'}
+                 onMouseOut={e => e.currentTarget.style.borderColor = '#3b3e3a'}>
+              <User size={32} color="#f05825" style={{ marginBottom: '15px', display: 'inline-block' }} />
+              <h2 style={{ color: '#f1f0ea', fontSize: '14px', marginBottom: '8px', letterSpacing: '1px' }}>STUDENT ACCESS</h2>
+              <p style={{ color: '#93988f', fontSize: '11px', lineHeight: '1.4', margin: 0 }}>Public portal for students to scan their QR and download their photos.</p>
             </div>
           </Link>
 

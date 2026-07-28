@@ -16,8 +16,10 @@ export default function MonitorDashboard() {
   
   const [logs, setLogs] = useState([{ time: new Date().toLocaleTimeString(), level: 'ok', message: 'SYSTEM INITIALIZED.' }]);
   const [agents, setAgents] = useState({});
+  const [unassignedPhotos, setUnassignedPhotos] = useState([]);
+  const [isPhotoDraggingOver, setIsPhotoDraggingOver] = useState(false);
 
-  // Drag and drop state
+  // Drag and drop state for queue reordering
   const dragItem = useRef();
   const dragOverItem = useRef();
 
@@ -25,6 +27,11 @@ export default function MonitorDashboard() {
     fetch('/api/students')
       .then(res => res.json())
       .then(data => setStudents(data))
+      .catch(err => console.error(err));
+
+    fetch('/api/uploads/unassigned')
+      .then(res => res.json())
+      .then(data => setUnassignedPhotos(data))
       .catch(err => console.error(err));
 
     const socket = io(window.location.origin.includes('localhost') ? 'http://localhost:8787' : '/');
@@ -48,6 +55,14 @@ export default function MonitorDashboard() {
 
     socket.on('agent_status', (agent) => {
       setAgents(prev => ({ ...prev, [agent.id]: { ...agent, online: true, lastSeen: Date.now() } }));
+    });
+
+    socket.on('new_unassigned_photo', (photo) => {
+      setUnassignedPhotos(prev => [photo, ...prev]);
+    });
+
+    socket.on('photo_assigned', (photo) => {
+      setUnassignedPhotos(prev => prev.filter(p => p._id !== photo._id));
     });
 
     return () => socket.disconnect();
@@ -80,7 +95,7 @@ export default function MonitorDashboard() {
     }
   };
 
-  // Drag and Drop Handlers
+  // Drag and Drop Handlers for Queue
   const handleDragStart = (e, index) => {
     dragItem.current = index;
     e.dataTransfer.effectAllowed = 'move';
@@ -111,6 +126,42 @@ export default function MonitorDashboard() {
     }
   };
 
+  // Drag and Drop Handlers for Photos
+  const handlePhotoDragStart = (e, photo) => {
+    e.dataTransfer.setData('photo_id', photo._id);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handlePhotoDragOver = (e) => {
+    e.preventDefault();
+    setIsPhotoDraggingOver(true);
+  };
+
+  const handlePhotoDragLeave = () => {
+    setIsPhotoDraggingOver(false);
+  };
+
+  const handlePhotoDrop = async (e) => {
+    e.preventDefault();
+    setIsPhotoDraggingOver(false);
+    const photoId = e.dataTransfer.getData('photo_id');
+    if (!photoId || !activeStudent) return;
+    
+    setUnassignedPhotos(prev => prev.filter(p => p._id !== photoId));
+    
+    try {
+      await fetch(`/api/uploads/${photoId}/assign`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ studentId: activeStudent.student_id })
+      });
+    } catch (err) {
+      console.error(err);
+      const res = await fetch('/api/uploads/unassigned');
+      setUnassignedPhotos(await res.json());
+    }
+  };
+
   const filteredStudents = students.filter(s => 
     s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
     s.student_id.toLowerCase().includes(searchQuery.toLowerCase())
@@ -131,7 +182,7 @@ export default function MonitorDashboard() {
           </span>
           <div className="header-divider"></div>
           <Link to="/">
-            <button className="header-link"><Home size={10} /> LAUNCHPAD</button>
+            <button className="ghost-control"><Home size={14} /> LAUNCHPAD</button>
           </Link>
         </div>
       </header>
@@ -142,7 +193,7 @@ export default function MonitorDashboard() {
           <h1>CEREMONY CONTROL</h1>
         </div>
         <div className="title-actions">
-          <button className="ghost-control" disabled={!activeStudent} onClick={() => activeStudent && window.open(`/s/${activeStudent.student_id}`, '_blank')}>
+          <button className="ghost-control" disabled={!activeStudent} onClick={() => activeStudent && window.open(`/s/${activeStudent.digital_qr}`, '_blank')}>
             [ PORTAL ]
           </button>
           <button className="accent-control" onClick={() => setQueuePaused(!queuePaused)}>
@@ -209,7 +260,13 @@ export default function MonitorDashboard() {
         </section>
 
         {/* CENTER COLUMN: ACTIVE STUDENT */}
-        <section className="panel-frame active-panel">
+        <section 
+          className={`panel-frame active-panel ${isPhotoDraggingOver ? 'drag-over' : ''}`}
+          onDragOver={handlePhotoDragOver}
+          onDragLeave={handlePhotoDragLeave}
+          onDrop={handlePhotoDrop}
+          style={isPhotoDraggingOver ? { border: '2px dashed #f05825', background: 'rgba(240, 88, 37, 0.05)' } : {}}
+        >
           <div className="panel-heading">
             <span>[ACTIVE_NODE]</span>
             <span className="sync-label">
@@ -244,11 +301,11 @@ export default function MonitorDashboard() {
                 <div className="qr-zone">
                   <div className="qr-shell">
                     <QRCodeSVG 
-                      value={`{"id":"${activeStudent.student_id}","t":"${Date.now()}"}`} 
+                      value={`${window.location.origin}/s/${activeStudent.digital_qr}`} 
                       size={132} 
                       level="L" 
                       includeMargin={false} 
-                    />
+                      bgColor="transparent"/>
                   </div>
                   <div className="qr-copy">
                     <p>DIGITAL IDENTIFIER</p>
@@ -286,11 +343,52 @@ export default function MonitorDashboard() {
 
         {/* RIGHT COLUMN: SYSTEM & AGENTS */}
         <div className="system-column">
+          <section className="panel-frame incoming-panel" style={{ flex: '1', display: 'flex', flexDirection: 'column', minHeight: '180px' }}>
+            <div className="panel-heading">
+              <span>[INCOMING_FEED]</span>
+              <span className="muted-small">{unassignedPhotos.length} UNASSIGNED</span>
+            </div>
+            <div className="incoming-grid" style={{ overflowY: 'auto', flex: 1, padding: '10px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(80px, 1fr))', gap: '8px' }}>
+              {unassignedPhotos.length === 0 ? (
+                <div style={{ padding: '20px 0', fontSize: '10px', color: '#777', gridColumn: '1 / -1', textAlign: 'center' }}>NO INCOMING PHOTOS</div>
+              ) : (
+                unassignedPhotos.map(photo => (
+                  <div 
+                    key={photo._id} 
+                    className="incoming-photo-card"
+                    draggable
+                    onDragStart={(e) => handlePhotoDragStart(e, photo)}
+                    style={{ 
+                      cursor: 'grab', 
+                      background: '#222', 
+                      border: '1px solid #444', 
+                      borderRadius: '4px',
+                      overflow: 'hidden',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <img 
+                      src={`/api/uploads/stream/${photo._id}`} 
+                      alt={photo.filename} 
+                      style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
+                      draggable={false}
+                    />
+                    <span style={{ fontSize: '9px', padding: '4px', color: '#ccc', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}>
+                      {photo.filename}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+
           <section className="panel-frame system-panel" style={{ flex: '1', display: 'flex', flexDirection: 'column' }}>
             <div className="panel-heading">
               <span>[SYSTEM_LOG]</span>
             </div>
-            <div className="logs" style={{ overflowY: 'auto', flex: 1, maxHeight: '250px' }}>
+            <div className="logs" style={{ overflowY: 'auto', flex: 1, maxHeight: '150px' }}>
               {logs.map((log, i) => (
                 <div key={i} className={`log ${log.level}`}>
                   <time>{log.time}</time>
@@ -326,21 +424,6 @@ export default function MonitorDashboard() {
               <span>[ RESTART ]</span>
             </div>
           </section>
-
-          <div className="drive-card">
-            <div>
-              <div className="drive-icon"><HardDrive size={18}/></div>
-              <p>RCLONE: DRIVE_01</p>
-              <span>MOUNTED: TRUE</span>
-            </div>
-            <div className="drive-state">
-              <span>ONLINE</span>
-              <div>
-                <strong>N/A GB</strong>
-                <small>FREE SPACE</small>
-              </div>
-            </div>
-          </div>
         </div>
       </main>
 

@@ -191,7 +191,7 @@ export default function AdminDashboard() {
           </span>
           <div className="header-divider"></div>
           <Link to="/">
-            <button className="header-link"><Home size={10} /> LAUNCHPAD</button>
+            <button className="ghost-control"><Home size={14} /> LAUNCHPAD</button>
           </Link>
         </div>
       </header>

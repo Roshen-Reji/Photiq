@@ -15,6 +15,8 @@ const queueRoute = require('./routes/queue.cjs');
 const uploadsRoute = require('./routes/uploads.cjs');
 const boothRoute = require('./routes/booth.cjs');
 const driveRoute = require('./routes/drive.cjs');
+const authRoute = require('./routes/auth.cjs');
+const requireAuth = require('./middleware/auth.cjs');
 
 const port = Number(process.env.PORT || 8787);
 const rcloneRemote = process.env.GRADSYNC_RCLONE_REMOTE || '';
@@ -28,11 +30,12 @@ app.use(cors());
 app.use(express.json({ limit: '12mb' }));
 
 // API Routes
-app.use('/api/students', studentsRoute);
-app.use('/api/queue', queueRoute);
-app.use('/api/uploads', uploadsRoute);
-app.use('/api/booth', boothRoute);
-app.use('/api/drive', driveRoute);
+app.use('/api/auth', authRoute);
+app.use('/api/students', requireAuth, studentsRoute);
+app.use('/api/queue', requireAuth, queueRoute);
+app.use('/api/uploads', requireAuth, uploadsRoute);
+app.use('/api/booth', requireAuth, boothRoute);
+app.use('/api/drive', driveRoute); // Drive is public for students, secured by URL tokens
 
 // Simple health endpoint
 app.get('/api/health', (req, res) => res.json({ ok: true, db: 'mongodb' }));

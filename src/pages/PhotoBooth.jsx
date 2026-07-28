@@ -152,8 +152,8 @@ export default function PhotoBooth() {
             KIOSK_01 ACTIVE
           </div>
           <Link to="/">
-            <button className="header-link" style={{ background: 'transparent', border: '1px solid #3b3e3a', color: '#aeb4aa', padding: '6px 12px', cursor: 'pointer', fontSize: '10px' }}>
-              <Home size={10} style={{ display: 'inline', marginRight: '4px' }} /> LAUNCHPAD
+            <button className="ghost-control">
+              <Home size={14} style={{ display: 'inline', marginRight: '4px', verticalAlign: 'text-bottom' }} /> LAUNCHPAD
             </button>
           </Link>
         </div>

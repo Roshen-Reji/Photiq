@@ -65,17 +65,11 @@ async function processQueue() {
   busy = true;
   const job = queue[0];
   try {
-    // 1. Fetch the active student from the new queue API
-    const activeStudent = await api('/api/queue/active');
-    if (!activeStudent || !activeStudent.student_id) {
-      throw new Error('No active student has been selected by the monitor.');
-    }
-    
-    // 2. Request an upload intent
+    // 1. Request an upload intent as UNASSIGNED
     const intent = await api('/api/uploads/intent', { 
       method: 'POST', 
       body: JSON.stringify({ 
-        studentId: activeStudent.student_id, 
+        studentId: 'UNASSIGNED', 
         source: 'stage', 
         filename: job.filename, 
         camera: config.cameraName, 
@@ -83,16 +77,16 @@ async function processQueue() {
       }) 
     });
     
-    // 3. Execute rclone
+    // 2. Execute rclone
     await runRclone(job.filePath, intent.rcloneDestination);
     
-    // 4. Mark as completed
+    // 3. Mark as completed
     await api(`/api/uploads/${intent.uploadId}/completed`, { 
       method: 'POST', 
       body: JSON.stringify({ completed: true }) 
     });
     
-    console.log(`Uploaded ${job.filename} for ${activeStudent.student_id}`);
+    console.log(`Uploaded ${job.filename} as UNASSIGNED`);
     queue.shift();
   } catch (error) {
     job.attempts += 1;

@@ -12,7 +12,7 @@ export default function AgentGuide() {
         </div>
         <nav className="header-nav">
           <Link to="/">
-            <button><ChevronLeft size={14} style={{ marginRight: '5px' }} /> LAUNCHPAD</button>
+            <button className="ghost-control"><ChevronLeft size={14} style={{ marginRight: '5px' }} /> LAUNCHPAD</button>
           </Link>
         </nav>
       </header>

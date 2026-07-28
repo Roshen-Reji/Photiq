@@ -5,10 +5,31 @@ const Student = require('../models/Student.cjs');
 const rclone = require('../controllers/rclone.cjs');
 const { spawn } = require('node:child_process');
 
-// Get all photos for a student
-router.get('/:studentId/photos', async (req, res) => {
+const findStudent = async (identifier) => {
+  return await Student.findOne({
+    $or: [
+      { student_id: identifier },
+      { digital_qr: identifier },
+      { physical_qr: identifier }
+    ]
+  });
+};
+
+// Get basic public student info for portal
+router.get('/:token/info', async (req, res) => {
   try {
-    const student = await Student.findOne({ student_id: req.params.studentId });
+    const student = await findStudent(req.params.token);
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    res.json({ name: student.name, department: student.department });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all photos for a student
+router.get('/:token/photos', async (req, res) => {
+  try {
+    const student = await findStudent(req.params.token);
     if (!student) return res.status(404).json({ error: 'Student not found' });
     
     const photos = await rclone.listStudentPhotos(student);
@@ -19,9 +40,9 @@ router.get('/:studentId/photos', async (req, res) => {
 });
 
 // Stream a specific photo
-router.get('/:studentId/photo/:filename', async (req, res) => {
+router.get('/:token/photo/:filename', async (req, res) => {
   try {
-    const student = await Student.findOne({ student_id: req.params.studentId });
+    const student = await findStudent(req.params.token);
     if (!student) return res.status(404).send('Student not found');
     
     // Attempt to set a reasonable content type
@@ -37,10 +58,10 @@ router.get('/:studentId/photo/:filename', async (req, res) => {
   }
 });
 
-// Download all photos as a ZIP
-router.get('/:studentId/download', async (req, res) => {
+// Download all photos as ZIP
+router.get('/:token/download', async (req, res) => {
   try {
-    const student = await Student.findOne({ student_id: req.params.studentId });
+    const student = await findStudent(req.params.token);
     if (!student) return res.status(404).send('Student not found');
     
     const photos = await rclone.listStudentPhotos(student);

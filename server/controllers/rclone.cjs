@@ -109,17 +109,38 @@ class RCloneService {
     }
     const folderName = this.getFolderName(student);
     const destination = `${this.remote}/${folderName}/${filename}`;
+    this.streamPhotoByPath(destination, res);
+  }
+
+  streamPhotoByPath(rclonePath, res) {
+    if (this.dryRun) {
+      res.status(404).send('Not found in dry run');
+      return;
+    }
+    const destination = rclonePath.startsWith(this.remote) ? rclonePath : `${this.remote}${rclonePath}`;
     
     const child = spawn('rclone', ['cat', destination]);
-    
     child.stdout.pipe(res);
-    
-    child.stderr.on('data', (data) => {
-      console.error(`[RClone Cat Error]: ${data}`);
-    });
-    
-    child.on('error', (err) => {
-      if (!res.headersSent) res.status(500).end();
+    child.stderr.on('data', (data) => console.error(`[RClone Cat Error]: ${data}`));
+    child.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+  }
+
+  moveFile(srcPath, destPath) {
+    return new Promise((resolve, reject) => {
+      const src = srcPath.startsWith(this.remote) ? srcPath : `${this.remote}${srcPath}`;
+      const dest = destPath.startsWith(this.remote) ? destPath : `${this.remote}${destPath}`;
+      
+      if (this.dryRun) {
+        console.log(`[RClone Dry Run] moveto "${src}" "${dest}"`);
+        return resolve();
+      }
+      
+      const child = spawn('rclone', ['moveto', src, dest], { stdio: 'pipe' });
+      child.on('error', reject);
+      child.on('exit', (code) => {
+        if (code === 0) resolve();
+        else reject(new Error(`RClone moveto failed with code ${code}`));
+      });
     });
   }
 }

@@ -13,13 +13,16 @@ router.post('/intent', async (req, res) => {
       return res.status(400).json({ error: 'Missing studentId or filename' });
     }
 
-    const student = await Student.findOne({ student_id: studentId });
-    if (!student) {
-      return res.status(404).json({ error: 'Student not found' });
-    }
+    let rcloneDestination = '/Incoming';
 
-    const folderName = rclone.getFolderName(student);
-    const rcloneDestination = `/${folderName}`;
+    if (studentId !== 'UNASSIGNED') {
+      const student = await Student.findOne({ student_id: studentId });
+      if (!student) {
+        return res.status(404).json({ error: 'Student not found' });
+      }
+      const folderName = rclone.getFolderName(student);
+      rcloneDestination = `/${folderName}`;
+    }
 
     const upload = new Upload({
       student_id: studentId,
@@ -63,7 +66,6 @@ router.post('/:id/completed', async (req, res) => {
     
     await upload.save();
 
-    // Optionally emit a socket event so the Monitor knows a file arrived
     const io = req.app.get('io');
     if (io) {
       io.emit('system_log', {
@@ -71,8 +73,71 @@ router.post('/:id/completed', async (req, res) => {
         level: completed ? 'ok' : 'warn',
         message: completed ? `FILE SYNCED: ${upload.filename}` : `SYNC FAILED: ${upload.filename}`
       });
+      if (completed && upload.student_id === 'UNASSIGNED') {
+        io.emit('new_unassigned_photo', upload);
+      }
     }
 
+    res.json(upload);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get all unassigned photos
+router.get('/unassigned', async (req, res) => {
+  try {
+    const unassigned = await Upload.find({ student_id: 'UNASSIGNED', status: 'completed' }).sort({ createdAt: -1 });
+    res.json(unassigned);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stream a photo by upload ID
+router.get('/stream/:id', async (req, res) => {
+  try {
+    const upload = await Upload.findById(req.params.id);
+    if (!upload || !upload.rclone_path) return res.status(404).send('Not found');
+    
+    rclone.streamPhotoByPath(upload.rclone_path, res);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Assign photo to a student
+router.post('/:id/assign', async (req, res) => {
+  try {
+    const { studentId } = req.body;
+    const upload = await Upload.findById(req.params.id);
+    
+    if (!upload) return res.status(404).json({ error: 'Upload not found' });
+    if (upload.student_id !== 'UNASSIGNED') return res.status(400).json({ error: 'Already assigned' });
+    
+    const student = await Student.findOne({ student_id: studentId });
+    if (!student) return res.status(404).json({ error: 'Student not found' });
+    
+    const folderName = rclone.getFolderName(student);
+    const newRclonePath = `/${folderName}/${upload.filename}`;
+    
+    // Move on remote using rclone
+    await rclone.moveFile(upload.rclone_path, newRclonePath);
+    
+    upload.student_id = studentId;
+    upload.rclone_path = newRclonePath;
+    await upload.save();
+    
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('system_log', {
+        time: new Date().toLocaleTimeString(),
+        level: 'ok',
+        message: `ASSIGNED: ${upload.filename} to ${student.name}`
+      });
+      io.emit('photo_assigned', upload);
+    }
+    
     res.json(upload);
   } catch (err) {
     res.status(500).json({ error: err.message });

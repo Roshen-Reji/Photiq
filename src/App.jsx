@@ -7,17 +7,24 @@ import StudentLogin from './pages/StudentLogin';
 import StudentPortal from './pages/StudentPortal';
 import AdminDashboard from './pages/AdminDashboard';
 import AgentGuide from './pages/AgentGuide';
+import AdminLogin from './pages/AdminLogin';
+import RequireAuth from './components/RequireAuth';
 import './styles.css';
 
 function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/monitor" element={<MonitorDashboard />} />
-        <Route path="/booth" element={<PhotoBooth />} />
-        <Route path="/admin" element={<AdminDashboard />} />
-        <Route path="/guide" element={<AgentGuide />} />
+        <Route path="/login" element={<AdminLogin />} />
+        
+        {/* Protected Admin Routes */}
+        <Route path="/" element={<RequireAuth><Home /></RequireAuth>} />
+        <Route path="/monitor" element={<RequireAuth><MonitorDashboard /></RequireAuth>} />
+        <Route path="/booth" element={<RequireAuth><PhotoBooth /></RequireAuth>} />
+        <Route path="/admin" element={<RequireAuth><AdminDashboard /></RequireAuth>} />
+        <Route path="/guide" element={<RequireAuth><AgentGuide /></RequireAuth>} />
+        
+        {/* Public Student Routes */}
         <Route path="/student" element={<StudentLogin />} />
         <Route path="/s/:token" element={<StudentPortal />} />
       </Routes>

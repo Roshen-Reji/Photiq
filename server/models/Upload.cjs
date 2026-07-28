@@ -3,8 +3,11 @@ const mongoose = require('mongoose');
 const uploadSchema = new mongoose.Schema({
   student_id: { type: String, required: true },
   filename: { type: String, required: true },
-  camera: { type: String }, // 'stage' or 'booth'
-  uploaded: { type: Boolean, default: false },
+  camera_id: { type: String }, 
+  source: { type: String },
+  status: { type: String, default: 'pending' },
+  rclone_path: { type: String },
+  error_log: { type: String },
   drive_url: { type: String },
 }, { timestamps: true });
 
