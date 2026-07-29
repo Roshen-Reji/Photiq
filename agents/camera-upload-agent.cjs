@@ -42,12 +42,14 @@ async function api(endpoint, options = {}) {
 }
 
 function runRclone(sourcePath, destination) {
+  const filename = path.basename(sourcePath);
+  const fullDest = `${config.rcloneRemote}${destination}/${filename}`;
   if (config.dryRun) {
-    console.log(`[dry run] rclone copyto "${sourcePath}" "${config.rcloneRemote}${destination}"`);
+    console.log(`[dry run] rclone copyto "${sourcePath}" "${fullDest}"`);
     return Promise.resolve();
   }
   return new Promise((resolve, reject) => {
-    const child = spawn('rclone', ['copyto', sourcePath, `${config.rcloneRemote}${destination}`, '--retries', '4', '--low-level-retries', '10'], { stdio: 'inherit', windowsHide: true });
+    const child = spawn('rclone', ['copyto', sourcePath, fullDest, '--retries', '4', '--low-level-retries', '10'], { stdio: 'inherit', windowsHide: true });
     child.once('error', reject);
     child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`rclone exited with code ${code}`)));
   });
@@ -105,7 +107,7 @@ async function boot() {
   await loadQueue();
   await fs.mkdir(config.watchDirectory, { recursive: true });
   console.log(`Watching ${config.watchDirectory} as ${config.cameraName}${config.dryRun ? ' (dry run)' : ''}`);
-  chokidar.watch(config.watchDirectory, { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 1800, pollInterval: 200 } }).on('add', enqueue);
+  chokidar.watch(config.watchDirectory, { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 800, pollInterval: 150 } }).on('add', enqueue);
   processQueue();
 }
 

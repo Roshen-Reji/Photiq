@@ -3,6 +3,7 @@ const { spawn, execSync } = require('node:child_process');
 class RCloneService {
   constructor() {
     this.remote = process.env.GRADSYNC_RCLONE_REMOTE || 'drive:';
+    this.baseFolder = process.env.GRADSYNC_BASE_FOLDER || 'GradSync';
     this.dryRun = process.env.GRADSYNC_RCLONE_DRY_RUN === 'true';
 
     // Auto-detect if rclone is installed
@@ -26,7 +27,7 @@ class RCloneService {
   // The format requested by user: studentname_studentid
   getFolderName(student) {
     const safeName = this.sanitizeName(student.name);
-    return `${safeName}_${student.student_id}`;
+    return `${this.baseFolder}/${safeName}_${student.student_id}`;
   }
 
   createStudentFolder(student, io) {

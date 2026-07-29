@@ -78,6 +78,7 @@ router.get('/:token/photo/:filename', async (req, res) => {
     
     // Optional: add cache headers
     res.setHeader('Cache-Control', 'public, max-age=86400'); // 1 day
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
     
     rclone.streamPhoto(student, req.params.filename, res);
   } catch (err) {

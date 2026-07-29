@@ -70,6 +70,15 @@ export default function MonitorDashboard() {
       setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p._id !== photo._id) : []);
     });
 
+    // When rclone finishes uploading, force the thumbnail to re-render
+    socket.on('photo_upload_complete', (photo) => {
+      setUnassignedPhotos(prev => 
+        Array.isArray(prev) 
+          ? prev.map(p => p._id === photo._id ? { ...photo, _refreshKey: Date.now() } : p) 
+          : []
+      );
+    });
+
     return () => socket.disconnect();
   }, []);
 
@@ -300,7 +309,7 @@ export default function MonitorDashboard() {
                 <div className="active-data-row">
                   <div>
                     <span>FOLDER TARGET</span>
-                    <strong className="success-text">/{activeStudent.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_{activeStudent.student_id}</strong>
+                    <strong className="success-text">GradSync/{activeStudent.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_{activeStudent.student_id}</strong>
                   </div>
                   <div>
                     <span>FILE COUNT</span>
@@ -376,15 +385,22 @@ export default function MonitorDashboard() {
                       overflow: 'hidden',
                       display: 'flex',
                       flexDirection: 'column',
-                      alignItems: 'center'
+                      alignItems: 'center',
+                      position: 'relative'
                     }}
                   >
-                    <img 
-                      src={`/api/uploads/stream/${photo._id}`} 
-                      alt={photo.filename} 
-                      style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
-                      draggable={false}
-                    />
+                    {photo.status === 'pending' ? (
+                      <div style={{ width: '100%', height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a1a', color: '#f05825', fontSize: '9px', letterSpacing: '1px' }}>
+                        <span style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>UPLOADING…</span>
+                      </div>
+                    ) : (
+                      <img 
+                        src={`/api/uploads/stream/${photo._id}${photo._refreshKey ? `?t=${photo._refreshKey}` : ''}`} 
+                        alt={photo.filename} 
+                        style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
+                        draggable={false}
+                      />
+                    )}
                     <span style={{ fontSize: '9px', padding: '4px', color: '#ccc', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}>
                       {photo.filename}
                     </span>

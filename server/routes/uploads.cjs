@@ -13,7 +13,7 @@ router.post('/intent', async (req, res) => {
       return res.status(400).json({ error: 'Missing studentId or filename' });
     }
 
-    let rcloneDestination = '/Incoming';
+    let rcloneDestination = '/GradSync/Incoming';
 
     if (studentId !== 'UNASSIGNED') {
       const student = await Student.findOne({ student_id: studentId });
@@ -42,6 +42,10 @@ router.post('/intent', async (req, res) => {
         time: new Date().toLocaleTimeString(),
         file: filename
       });
+      // Emit immediately so the monitor incoming feed updates live
+      if (studentId === 'UNASSIGNED') {
+        io.emit('new_unassigned_photo', upload);
+      }
     }
 
     res.json({
@@ -73,8 +77,9 @@ router.post('/:id/completed', async (req, res) => {
         level: completed ? 'ok' : 'warn',
         message: completed ? `FILE SYNCED: ${upload.filename}` : `SYNC FAILED: ${upload.filename}`
       });
+      // Notify monitor to refresh the thumbnail now that file is on Drive
       if (completed && upload.student_id === 'UNASSIGNED') {
-        io.emit('new_unassigned_photo', upload);
+        io.emit('photo_upload_complete', upload);
       }
     }
 
@@ -99,6 +104,10 @@ router.get('/stream/:id', async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id);
     if (!upload || !upload.rclone_path) return res.status(404).send('Not found');
+    
+    // Set content type so the UI renders it as an image correctly
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     
     rclone.streamPhotoByPath(upload.rclone_path, res);
   } catch (err) {
