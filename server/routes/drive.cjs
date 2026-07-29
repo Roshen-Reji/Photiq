@@ -137,30 +137,29 @@ router.get('/:token/photo/:filename', async (req, res) => {
     if (!student) return res.status(404).send('Student not found');
     
     // Attempt to set a reasonable content type
-    if (req.params.filename.toLowerCase().endsWith('.png')) res.setHeader('Content-Type', 'image/png');
-    else res.setHeader('Content-Type', 'image/jpeg');
+    const isPng = req.params.filename.toLowerCase().endsWith('.png');
     
-    // Cache headers
-    res.setHeader('Cache-Control', 'public, max-age=86400'); // 1 day
-    res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
-    
-    // Try streaming from rclone first
-    try {
-      rclone.streamPhoto(student, req.params.filename, res);
-    } catch (rcloneErr) {
-      // Fallback: try serving preview from DB
+    // If rclone is in dry-run mode, serve from DB uploads first
+    if (rclone.dryRun) {
       const upload = await Upload.findOne(
         { student_id: student.student_id, filename: req.params.filename },
         { preview_base64: 1 }
       );
       if (upload?.preview_base64) {
         const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
+        res.setHeader('Content-Type', isPng ? 'image/png' : 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
         res.setHeader('Content-Length', imgBuffer.length);
-        res.send(imgBuffer);
-      } else if (!res.headersSent) {
-        res.status(404).send('Photo not found');
+        return res.send(imgBuffer);
       }
+      return res.status(404).send('Photo not available — rclone is not configured and no preview exists in DB.');
     }
+
+    // rclone is available — stream from Drive
+    res.setHeader('Content-Type', isPng ? 'image/png' : 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // 1 day
+    res.setHeader('Content-Disposition', `attachment; filename="${req.params.filename}"`);
+    rclone.streamPhoto(student, req.params.filename, res);
   } catch (err) {
     console.error('Photo stream error:', err);
     if (!res.headersSent) res.status(500).send(err.message);
