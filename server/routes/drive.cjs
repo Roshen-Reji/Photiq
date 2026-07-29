@@ -6,11 +6,38 @@ const rclone = require('../controllers/rclone.cjs');
 const { spawn } = require('node:child_process');
 
 const findStudent = async (identifier) => {
+  if (!identifier || identifier === 'undefined' || identifier === 'null') return null;
+  const cleanId = String(identifier).trim();
+  if (!cleanId) return null;
+  
+  // 1. Try exact match (digital_qr, student_id, physical_qr)
+  let student = await Student.findOne({
+    $or: [
+      { digital_qr: cleanId },
+      { student_id: cleanId },
+      { physical_qr: cleanId }
+    ]
+  });
+  
+  if (student) return student;
+
+  // 2. Try uppercase match
+  const upperId = cleanId.toUpperCase();
+  student = await Student.findOne({
+    $or: [
+      { student_id: upperId },
+      { physical_qr: upperId }
+    ]
+  });
+  
+  if (student) return student;
+
+  // 3. Try case-insensitive regex match
+  const safeRegex = new RegExp(`^${cleanId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
   return await Student.findOne({
     $or: [
-      { student_id: identifier },
-      { digital_qr: identifier },
-      { physical_qr: identifier }
+      { student_id: safeRegex },
+      { physical_qr: safeRegex }
     ]
   });
 };

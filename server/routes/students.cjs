@@ -7,6 +7,13 @@ const { v4: uuidv4 } = require('uuid');
 router.get('/', async (req, res) => {
   try {
     const students = await Student.find().sort({ queuePosition: 1 });
+    // Backfill any missing digital_qr fields in legacy DB records
+    for (const student of students) {
+      if (!student.digital_qr) {
+        student.digital_qr = uuidv4();
+        await student.save();
+      }
+    }
     res.json(students);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -27,6 +34,7 @@ router.post('/', async (req, res) => {
       student_id: id,
       name,
       department,
+      digital_qr: uuidv4(),
       queuePosition: count
     });
     
@@ -49,25 +57,39 @@ router.post('/import', async (req, res) => {
   
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i];
-    const id = typeof candidate.id === 'string' ? candidate.id.trim().toUpperCase() : '';
-    const name = typeof candidate.name === 'string' ? candidate.name.trim() : '';
-    const department = typeof candidate.department === 'string' ? candidate.department.trim().toUpperCase() : '';
+    let name = candidate.name !== undefined && candidate.name !== null ? String(candidate.name).trim() : '';
+    let department = candidate.department !== undefined && candidate.department !== null ? String(candidate.department).trim().toUpperCase() : 'GENERAL';
+    let id = candidate.id !== undefined && candidate.id !== null ? String(candidate.id).trim().toUpperCase() : '';
     
-    if (!id || !name || !department) {
-      rejected.push({ row: i + 1, id: id || null, reason: 'Missing required fields' });
+    // Only student name is required
+    if (!name) {
+      rejected.push({ row: i + 1, id: id || null, reason: 'Missing student name' });
       continue;
     }
-    
-    const existing = await Student.findOne({ student_id: id });
-    if (existing) {
-      rejected.push({ row: i + 1, id, reason: 'Duplicate student ID' });
-      continue;
+
+    // Auto-generate student ID if missing or empty
+    if (!id) {
+      let nextNum = currentCount + 1;
+      id = `STU-${String(nextNum).padStart(4, '0')}`;
+      while (await Student.findOne({ student_id: id })) {
+        nextNum++;
+        id = `STU-${String(nextNum).padStart(4, '0')}`;
+      }
+    } else {
+      // If student ID already exists, make it unique with a suffix instead of rejecting
+      let originalId = id;
+      let suffix = 1;
+      while (await Student.findOne({ student_id: id })) {
+        id = `${originalId}_${suffix}`;
+        suffix++;
+      }
     }
     
     const student = new Student({
       student_id: id,
       name,
       department,
+      digital_qr: uuidv4(),
       queuePosition: currentCount++
     });
     await student.save();

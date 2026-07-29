@@ -5,18 +5,33 @@ import { Download, Share2, Grid } from 'lucide-react';
 export default function StudentPortal() {
   const { token } = useParams();
   const [photos, setPhotos] = useState([]);
+  const [studentInfo, setStudentInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetchPhotos();
+    fetchData();
   }, [token]);
 
-  const fetchPhotos = async () => {
+  const fetchData = async () => {
     try {
       setLoading(true);
+      setError(null);
+
+      // Fetch student basic info
+      try {
+        const infoRes = await fetch(`/api/drive/${token}/info`);
+        if (infoRes.ok) {
+          const info = await infoRes.json();
+          setStudentInfo(info);
+        }
+      } catch (e) {
+        console.warn('Could not fetch student info:', e);
+      }
+
+      // Fetch photos
       const res = await fetch(`/api/drive/${token}/photos`);
-      if (!res.ok) throw new Error('Failed to load photos or student not found.');
+      if (!res.ok) throw new Error('Failed to load photos or student profile not found.');
       const data = await res.json();
       
       // Assign random styles to photos for the masonry grid look
@@ -39,7 +54,6 @@ export default function StudentPortal() {
   };
 
   const handleDownloadSingle = (filename) => {
-    // Open the stream in a new tab to prompt download (or use an invisible anchor)
     const link = document.createElement('a');
     link.href = `/api/drive/${token}/photo/${filename}`;
     link.download = filename;
@@ -61,8 +75,10 @@ export default function StudentPortal() {
       <main className="gallery-wrap">
         <div className="gallery-hero">
           <div>
-            <p className="portal-eyebrow">CLASS OF 2026</p>
-            <h1><i>Your</i><br/>Moments.</h1>
+            <p className="portal-eyebrow">
+              CLASS OF 2026 {studentInfo?.department ? `// ${studentInfo.department.toUpperCase()}` : ''}
+            </p>
+            <h1><i>{studentInfo?.name ? studentInfo.name : 'Your'}</i><br/>Moments.</h1>
             <p>Welcome to your personal graduation gallery. High-resolution downloads are included.</p>
           </div>
           <button className="download-all" onClick={handleDownloadAll} disabled={photos.length === 0 || loading}>
@@ -76,7 +92,14 @@ export default function StudentPortal() {
           <span><i className="gallery-live"></i> SYNCING LIVE</span>
         </div>
         
-        {error && <div style={{ color: '#e8542e', padding: '20px' }}>{error}</div>}
+        {error && <div style={{ color: '#e8542e', padding: '20px', background: 'rgba(232, 84, 46, 0.1)', border: '1px solid #e8542e', borderRadius: '4px', margin: '20px 0' }}>{error}</div>}
+
+        {!loading && !error && photos.length === 0 && (
+          <div style={{ textAlign: 'center', padding: '60px 20px', color: '#aeb4aa' }}>
+            <h3 style={{ color: '#f1f0ea', marginBottom: '10px' }}>NO PHOTOS YET</h3>
+            <p>Your photos are being processed and synced. Please check back shortly!</p>
+          </div>
+        )}
 
         <div className="photo-grid">
           {photos.map((p, i) => (
