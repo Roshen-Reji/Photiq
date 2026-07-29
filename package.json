@@ -7,7 +7,7 @@
     "dev": "vite",
     "server": "node server/index.cjs",
     "start": "node server/index.cjs",
-    "local": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npm run dev\"",
+    "local": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"wait-on tcp:8787 && npm run dev\"",
     "agent:camera": "node agents/camera-upload-agent.cjs",
     "setup:prod": "node scripts/setup.cjs",
     "build": "vite build",
@@ -42,6 +42,7 @@
   "devDependencies": {
     "@vitejs/plugin-react": "^6.0.4",
     "concurrently": "^10.0.4",
-    "vite": "^8.1.5"
+    "vite": "^8.1.5",
+    "wait-on": "^9.1.0"
   }
 }

@@ -1,11 +1,46 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   Wifi, Activity, Server, Search, Upload, MoreHorizontal, 
-  Play, Pause, FastForward, Settings, HardDrive, Home, ExternalLink 
+  Play, Pause, FastForward, Settings, HardDrive, Home, ExternalLink, Plus, X, Check, AlertTriangle
 } from 'lucide-react';
+import useToast from '../hooks/useToast';
+import ToastContainer from '../components/Toast';
+
+// Status badge colors
+const STATUS_COLORS = {
+  pending: { bg: '#333', color: '#aaa', label: 'WAITING' },
+  preview_uploading: { bg: '#3d2a0f', color: '#f0a830', label: 'UPLOADING PREVIEW' },
+  preview_ready: { bg: '#1a2e1a', color: '#75dba6', label: 'PREVIEW READY' },
+  uploading_original: { bg: '#2a1f0f', color: '#f0a830', label: 'UPLOADING ORIGINAL' },
+  completed: { bg: '#1a2e1a', color: '#75dba6', label: 'COMPLETE' },
+  failed: { bg: '#3d1a1a', color: '#f05825', label: 'FAILED' },
+  retrying: { bg: '#3d2a0f', color: '#ffc107', label: 'RETRYING' },
+};
+
+function StatusBadge({ status }) {
+  const config = STATUS_COLORS[status] || STATUS_COLORS.pending;
+  const isActive = status === 'preview_uploading' || status === 'uploading_original' || status === 'retrying';
+  return (
+    <span style={{
+      fontSize: '8px',
+      padding: '2px 6px',
+      borderRadius: '3px',
+      background: config.bg,
+      color: config.color,
+      letterSpacing: '0.5px',
+      fontWeight: 'bold',
+      display: 'inline-flex',
+      alignItems: 'center',
+      gap: '4px',
+    }}>
+      {isActive && <i className="pulse-dot" style={{ width: '5px', height: '5px' }}></i>}
+      {config.label}
+    </span>
+  );
+}
 
 export default function MonitorDashboard() {
   const [students, setStudents] = useState([]);
@@ -19,27 +54,50 @@ export default function MonitorDashboard() {
   const [unassignedPhotos, setUnassignedPhotos] = useState([]);
   const [isPhotoDraggingOver, setIsPhotoDraggingOver] = useState(false);
 
+  // Add Node modal state (Fix 6)
+  const [showAddNode, setShowAddNode] = useState(false);
+  const [addNodeForm, setAddNodeForm] = useState({ id: '', name: '', department: '' });
+  const [addNodeLoading, setAddNodeLoading] = useState(false);
+
+  // Toast notifications (Fix 9)
+  const { toasts, addToast, removeToast } = useToast();
+
+  // Debounced search (Fix 7)
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const searchTimerRef = useRef(null);
+
   // Drag and drop state for queue reordering
   const dragItem = useRef();
   const dragOverItem = useRef();
+  const socketRef = useRef(null);
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('gradsync_admin_token');
     return token ? { 'Authorization': `Bearer ${token}` } : {};
   };
 
+  // Debounce search input (Fix 7)
+  useEffect(() => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    searchTimerRef.current = setTimeout(() => {
+      setDebouncedSearch(searchQuery);
+    }, 300);
+    return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
+  }, [searchQuery]);
+
   useEffect(() => {
     fetch('/api/students', { headers: getAuthHeaders() })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then(data => setStudents(Array.isArray(data) ? data : []))
-      .catch(err => { console.error(err); setStudents([]); });
+      .catch(err => { console.error(err); addToast(`Failed to load students: ${err.message}`, 'error'); setStudents([]); });
 
     fetch('/api/uploads/unassigned', { headers: getAuthHeaders() })
-      .then(res => res.json())
+      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then(data => setUnassignedPhotos(Array.isArray(data) ? data : []))
       .catch(err => { console.error(err); setUnassignedPhotos([]); });
 
     const socket = io();
+    socketRef.current = socket;
     
     socket.on('connect', () => {
       setSocketConnected(true);
@@ -48,6 +106,11 @@ export default function MonitorDashboard() {
 
     socket.on('disconnect', () => {
       setSocketConnected(false);
+      addToast('Connection lost. Attempting to reconnect...', 'warning');
+    });
+
+    socket.on('reconnect', () => {
+      addToast('Connection restored.', 'success');
     });
 
     socket.on('state_update', (student) => {
@@ -79,23 +142,88 @@ export default function MonitorDashboard() {
       );
     });
 
+    // Real-time preview ready (Fix 1 & 8)
+    socket.on('preview_ready', (data) => {
+      setUnassignedPhotos(prev => {
+        if (!Array.isArray(prev)) return [data];
+        const existing = prev.find(p => p._id === data._id);
+        if (existing) {
+          return prev.map(p => p._id === data._id ? { ...p, ...data, status: 'preview_ready', preview_ready: true } : p);
+        }
+        return prev;
+      });
+    });
+
+    // Upload progress tracking (Fix 8)
+    socket.on('upload_progress', (data) => {
+      setUnassignedPhotos(prev =>
+        Array.isArray(prev)
+          ? prev.map(p => p._id === data._id ? { ...p, upload_progress: data.upload_progress, status: data.status } : p)
+          : []
+      );
+    });
+
+    // Original ready (Fix 8)
+    socket.on('original_ready', (data) => {
+      setUnassignedPhotos(prev =>
+        Array.isArray(prev)
+          ? prev.map(p => p._id === data._id ? { ...p, status: 'completed', original_ready: true, _refreshKey: Date.now() } : p)
+          : []
+      );
+    });
+
+    // Real-time student list updates (Fix 3)
+    socket.on('student_added', (student) => {
+      setStudents(prev => [...prev, student]);
+    });
+
+    socket.on('student_deleted', ({ student_id }) => {
+      setStudents(prev => prev.filter(s => s.student_id !== student_id));
+    });
+
+    socket.on('student_updated', (student) => {
+      setStudents(prev => prev.map(s => s.student_id === student.student_id ? student : s));
+    });
+
+    socket.on('students_imported', ({ students: newStudents }) => {
+      if (Array.isArray(newStudents)) {
+        setStudents(prev => [...prev, ...newStudents]);
+      }
+    });
+
+    socket.on('queue_reordered', (reorderedStudents) => {
+      if (Array.isArray(reorderedStudents)) setStudents(reorderedStudents);
+    });
+
+    // Initial unassigned photos sync
+    socket.on('unassigned_photos_sync', (photos) => {
+      if (Array.isArray(photos)) setUnassignedPhotos(photos);
+    });
+
     return () => socket.disconnect();
   }, []);
 
-  const handleNext = async (id) => {
+  const handleNext = useCallback(async (id) => {
     if (queuePaused) return; // Prevent advancing if paused
-    const res = await fetch('/api/queue/active', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-      body: JSON.stringify({ studentId: id })
-    });
-    const updated = await res.json();
-    if (updated && !updated.error) {
-      setActiveStudent(updated);
+    try {
+      const res = await fetch('/api/queue/active', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ studentId: id })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const updated = await res.json();
+      if (updated && !updated.error) {
+        setActiveStudent(updated);
+      } else if (updated?.error) {
+        addToast(updated.error, 'error');
+      }
+    } catch (err) {
+      addToast(`Failed to advance queue: ${err.message}`, 'error');
     }
-  };
+  }, [queuePaused, addToast]);
 
-  const advanceQueue = (direction) => {
+  const advanceQueue = useCallback((direction) => {
     if (!Array.isArray(students) || !students.length) return;
     if (!activeStudent) {
       handleNext(students[0].student_id);
@@ -108,6 +236,32 @@ export default function MonitorDashboard() {
     
     if (targetIndex !== currentIndex) {
       handleNext(students[targetIndex].student_id);
+    }
+  }, [students, activeStudent, handleNext]);
+
+  // Add Node handler (Fix 6)
+  const handleAddNode = async (e) => {
+    e.preventDefault();
+    if (!addNodeForm.id || !addNodeForm.name) {
+      addToast('Student ID and name are required.', 'warning');
+      return;
+    }
+    setAddNodeLoading(true);
+    try {
+      const res = await fetch('/api/students', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify(addNodeForm)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      addToast(`Student ${data.name} added successfully.`, 'success');
+      setAddNodeForm({ id: '', name: '', department: '' });
+      setShowAddNode(false);
+    } catch (err) {
+      addToast(`Failed to add student: ${err.message}`, 'error');
+    } finally {
+      setAddNodeLoading(false);
     }
   };
 
@@ -122,7 +276,7 @@ export default function MonitorDashboard() {
   };
 
   const handleDrop = async (e) => {
-    if (searchQuery) return; // Disable reorder while searching
+    if (debouncedSearch) return; // Disable reorder while searching
     if (dragItem.current !== null && dragOverItem.current !== null) {
       const newList = [...students];
       const draggedItemContent = newList[dragItem.current];
@@ -133,12 +287,16 @@ export default function MonitorDashboard() {
       setStudents(newList);
 
       // Save to backend
-      const studentIds = newList.map(s => s.student_id);
-      await fetch('/api/queue/reorder', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify({ studentIds })
-      });
+      try {
+        const studentIds = newList.map(s => s.student_id);
+        await fetch('/api/queue/reorder', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ studentIds })
+        });
+      } catch (err) {
+        addToast(`Failed to save queue order: ${err.message}`, 'error');
+      }
     }
   };
 
@@ -161,28 +319,45 @@ export default function MonitorDashboard() {
     e.preventDefault();
     setIsPhotoDraggingOver(false);
     const photoId = e.dataTransfer.getData('photo_id');
-    if (!photoId || !activeStudent) return;
+    if (!photoId || !activeStudent) {
+      if (!activeStudent) addToast('Select an active student first before assigning photos.', 'warning');
+      return;
+    }
     
     setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p._id !== photoId) : []);
     
     try {
-      await fetch(`/api/uploads/${photoId}/assign`, {
+      const res = await fetch(`/api/uploads/${photoId}/assign`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ studentId: activeStudent.student_id })
       });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      addToast(`Photo assigned to ${activeStudent.name}.`, 'success');
     } catch (err) {
-      console.error(err);
-      const res = await fetch('/api/uploads/unassigned', { headers: getAuthHeaders() });
-      const data = await res.json();
-      setUnassignedPhotos(Array.isArray(data) ? data : []);
+      addToast(`Failed to assign photo: ${err.message}`, 'error');
+      // Refresh unassigned list
+      try {
+        const res = await fetch('/api/uploads/unassigned', { headers: getAuthHeaders() });
+        const data = await res.json();
+        setUnassignedPhotos(Array.isArray(data) ? data : []);
+      } catch (e) { /* ignore refresh failure */ }
     }
   };
 
-  const filteredStudents = Array.isArray(students) ? students.filter(s => 
-    (s.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
-    (s.student_id || '').toLowerCase().includes(searchQuery.toLowerCase())
-  ) : [];
+  // Memoized filtered list (Fix 7)
+  const filteredStudents = useMemo(() => {
+    if (!Array.isArray(students)) return [];
+    if (!debouncedSearch) return students;
+    const q = debouncedSearch.toLowerCase();
+    return students.filter(s => 
+      (s.name || '').toLowerCase().includes(q) || 
+      (s.student_id || '').toLowerCase().includes(q)
+    );
+  }, [students, debouncedSearch]);
 
   return (
     <div className="monitor-app">
@@ -234,6 +409,7 @@ export default function MonitorDashboard() {
               placeholder="QUERY STUDENT_ID OR NAME..." 
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === 'Escape' && setSearchQuery('')}
             />
             <kbd>ESC</kbd>
           </div>
@@ -250,12 +426,12 @@ export default function MonitorDashboard() {
                 key={s.student_id} 
                 className={`queue-item ${activeStudent?.student_id === s.student_id ? 'active' : ''}`}
                 onClick={() => handleNext(s.student_id)}
-                draggable={!searchQuery}
+                draggable={!debouncedSearch}
                 onDragStart={(e) => handleDragStart(e, idx)}
                 onDragEnter={(e) => handleDragEnter(e, idx)}
                 onDragEnd={handleDrop}
                 onDragOver={(e) => e.preventDefault()}
-                style={{ cursor: searchQuery ? 'pointer' : 'grab' }}
+                style={{ cursor: debouncedSearch ? 'pointer' : 'grab' }}
               >
                 <div className="drag-marks" style={{ cursor: 'grab' }}>|||</div>
                 <span className="queue-number">{(idx + 1).toString().padStart(2, '0')}</span>
@@ -273,9 +449,53 @@ export default function MonitorDashboard() {
           </div>
           
           <div className="queue-footer">
-            <button>[ + ADD NODE ]</button>
+            <button onClick={() => setShowAddNode(!showAddNode)}>[ + ADD NODE ]</button>
             <span>SYNC_RATE: {socketConnected ? '12ms' : 'ERR'}</span>
           </div>
+
+          {/* Add Node Form (Fix 6) */}
+          {showAddNode && (
+            <div style={{ padding: '12px 14px', borderTop: '1px solid #3b3e3a', background: '#0d0e0d' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <span style={{ fontSize: '10px', color: '#f05825', letterSpacing: '1px' }}>[NEW_NODE]</span>
+                <button onClick={() => setShowAddNode(false)} style={{ background: 'none', border: 'none', color: '#777', cursor: 'pointer', padding: '2px' }}>
+                  <X size={12} />
+                </button>
+              </div>
+              <form onSubmit={handleAddNode} style={{ display: 'grid', gap: '8px' }}>
+                <input
+                  type="text"
+                  placeholder="STUDENT_ID"
+                  value={addNodeForm.id}
+                  onChange={e => setAddNodeForm(prev => ({ ...prev, id: e.target.value }))}
+                  required
+                  style={{ background: '#090a0a', border: '1px solid #3b3e3a', color: '#f1f0ea', fontSize: '10px', padding: '8px 10px', outline: 'none', fontFamily: 'inherit' }}
+                />
+                <input
+                  type="text"
+                  placeholder="FULL_NAME"
+                  value={addNodeForm.name}
+                  onChange={e => setAddNodeForm(prev => ({ ...prev, name: e.target.value }))}
+                  required
+                  style={{ background: '#090a0a', border: '1px solid #3b3e3a', color: '#f1f0ea', fontSize: '10px', padding: '8px 10px', outline: 'none', fontFamily: 'inherit' }}
+                />
+                <input
+                  type="text"
+                  placeholder="DEPARTMENT"
+                  value={addNodeForm.department}
+                  onChange={e => setAddNodeForm(prev => ({ ...prev, department: e.target.value }))}
+                  style={{ background: '#090a0a', border: '1px solid #3b3e3a', color: '#f1f0ea', fontSize: '10px', padding: '8px 10px', outline: 'none', fontFamily: 'inherit' }}
+                />
+                <button
+                  type="submit"
+                  disabled={addNodeLoading}
+                  style={{ background: '#f05825', color: '#111', border: 'none', fontSize: '10px', padding: '8px', cursor: addNodeLoading ? 'wait' : 'pointer', fontWeight: 'bold', fontFamily: 'inherit', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                >
+                  {addNodeLoading ? 'ADDING...' : <><Plus size={10} /> ADD TO QUEUE</>}
+                </button>
+              </form>
+            </div>
+          )}
         </section>
 
         {/* CENTER COLUMN: ACTIVE STUDENT */}
@@ -389,21 +609,38 @@ export default function MonitorDashboard() {
                       position: 'relative'
                     }}
                   >
-                    {photo.status === 'pending' ? (
-                      <div style={{ width: '100%', height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a1a', color: '#f05825', fontSize: '9px', letterSpacing: '1px' }}>
+                    {photo.status === 'pending' || photo.status === 'preview_uploading' ? (
+                      <div style={{ width: '100%', height: '60px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#1a1a1a', color: '#f05825', fontSize: '9px', letterSpacing: '1px', flexDirection: 'column', gap: '4px' }}>
                         <span style={{ animation: 'pulse 1.5s ease-in-out infinite' }}>UPLOADING…</span>
+                        {typeof photo.upload_progress === 'number' && photo.upload_progress > 0 && (
+                          <div style={{ width: '80%', height: '3px', background: '#333', borderRadius: '2px', overflow: 'hidden' }}>
+                            <div style={{ width: `${photo.upload_progress}%`, height: '100%', background: '#f05825', transition: 'width 0.3s ease' }}></div>
+                          </div>
+                        )}
                       </div>
+                    ) : photo.preview_ready && photo.preview_base64 ? (
+                      <img 
+                        src={`data:image/jpeg;base64,${photo.preview_base64}`}
+                        alt={photo.filename} 
+                        style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
+                        draggable={false}
+                        loading="lazy"
+                      />
                     ) : (
                       <img 
                         src={`/api/uploads/stream/${photo._id}${photo._refreshKey ? `?t=${photo._refreshKey}` : ''}`} 
                         alt={photo.filename} 
                         style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
                         draggable={false}
+                        loading="lazy"
                       />
                     )}
-                    <span style={{ fontSize: '9px', padding: '4px', color: '#ccc', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}>
-                      {photo.filename}
-                    </span>
+                    <div style={{ width: '100%', padding: '4px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                      <span style={{ fontSize: '9px', color: '#ccc', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', width: '100%', textAlign: 'center' }}>
+                        {photo.filename}
+                      </span>
+                      <StatusBadge status={photo.status} />
+                    </div>
                   </div>
                 ))
               )}
@@ -457,6 +694,8 @@ export default function MonitorDashboard() {
         <span><i className="signal"></i> CONNECTION STABLE</span>
         <span>GRADSYNC PROTOCOL V1</span>
       </footer>
+
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
     </div>
   );
 }

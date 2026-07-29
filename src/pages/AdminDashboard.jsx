@@ -1,12 +1,16 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { read, utils } from 'xlsx';
 import jsQR from 'jsqr';
+import { io } from 'socket.io-client';
 import { Upload, Plus, Trash2, Edit2, Server, Search, Camera, CameraOff, Link2, Home, ExternalLink } from 'lucide-react';
+import useToast from '../hooks/useToast';
+import ToastContainer from '../components/Toast';
 
 export default function AdminDashboard() {
   const [students, setStudents] = useState([]);
   const [search, setSearch] = useState('');
+  const { toasts, addToast, removeToast } = useToast();
   
   // Add/Edit State
   const [editingStudent, setEditingStudent] = useState(null);
@@ -25,6 +29,22 @@ export default function AdminDashboard() {
 
   useEffect(() => {
     fetchStudents();
+
+    // Socket.IO real-time sync (Fix 3)
+    const socket = io();
+    socket.on('student_added', (student) => {
+      setStudents(prev => [...prev, student]);
+    });
+    socket.on('student_deleted', ({ student_id }) => {
+      setStudents(prev => prev.filter(s => s.student_id !== student_id));
+    });
+    socket.on('student_updated', (student) => {
+      setStudents(prev => prev.map(s => s.student_id === student.student_id ? student : s));
+    });
+    socket.on('students_imported', ({ students: newStudents }) => {
+      if (Array.isArray(newStudents)) setStudents(prev => [...prev, ...newStudents]);
+    });
+    return () => socket.disconnect();
   }, []);
 
   const fetchStudents = async () => {
@@ -32,10 +52,12 @@ export default function AdminDashboard() {
       const res = await fetch('/api/students', {
         headers: getAuthHeaders()
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setStudents(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
+      addToast(`Failed to load students: ${err.message}`, 'error');
       setStudents([]);
     }
   };
@@ -156,15 +178,15 @@ export default function AdminDashboard() {
           if (result.rejected && result.rejected.length > 0) {
             msg += ` (${result.rejected.length} skipped: missing names)`;
           }
-          alert(msg);
+          addToast(msg, 'success');
         } else {
-          alert(result.error || 'Import failed');
+          addToast(result.error || 'Import failed', 'error');
         }
 
         fetchStudents();
       } catch (err) {
         console.error('XLSX import error:', err);
-        alert('Failed to parse spreadsheet file: ' + err.message);
+        addToast('Failed to parse spreadsheet file: ' + err.message, 'error');
       }
     };
     reader.readAsArrayBuffer(file);
@@ -175,31 +197,45 @@ export default function AdminDashboard() {
     e.preventDefault();
     if (!formState.id || !formState.name) return;
 
-    if (editingStudent) {
-      await fetch(`/api/students/${editingStudent.student_id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify(formState)
-      });
-    } else {
-      await fetch('/api/students', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
-        body: JSON.stringify(formState)
-      });
+    try {
+      if (editingStudent) {
+        const res = await fetch(`/api/students/${editingStudent.student_id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify(formState)
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || `HTTP ${res.status}`); }
+        addToast('Student updated successfully.', 'success');
+      } else {
+        const res = await fetch('/api/students', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify(formState)
+        });
+        if (!res.ok) { const d = await res.json(); throw new Error(d.error || `HTTP ${res.status}`); }
+        addToast('Student added successfully.', 'success');
+      }
+      setFormState({ id: '', name: '', department: '' });
+      setEditingStudent(null);
+      fetchStudents();
+    } catch (err) {
+      addToast(`Failed: ${err.message}`, 'error');
     }
-    setFormState({ id: '', name: '', department: '' });
-    setEditingStudent(null);
-    fetchStudents();
   };
 
   const handleDelete = async (id) => {
     if (!confirm(`Are you sure you want to delete student ${id}?`)) return;
-    await fetch(`/api/students/${id}`, {
-      method: 'DELETE',
-      headers: getAuthHeaders()
-    });
-    fetchStudents();
+    try {
+      const res = await fetch(`/api/students/${id}`, {
+        method: 'DELETE',
+        headers: getAuthHeaders()
+      });
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      addToast('Student deleted.', 'success');
+      fetchStudents();
+    } catch (err) {
+      addToast(`Delete failed: ${err.message}`, 'error');
+    }
   };
 
   const handleEdit = (s) => {
@@ -274,10 +310,15 @@ export default function AdminDashboard() {
     fetchStudents();
   };
 
-  const filteredStudents = Array.isArray(students) ? students.filter(s => 
-    (s.name || '').toLowerCase().includes(search.toLowerCase()) || 
-    (s.student_id || '').toLowerCase().includes(search.toLowerCase())
-  ) : [];
+  const filteredStudents = useMemo(() => {
+    if (!Array.isArray(students)) return [];
+    if (!search) return students;
+    const q = search.toLowerCase();
+    return students.filter(s => 
+      (s.name || '').toLowerCase().includes(q) || 
+      (s.student_id || '').toLowerCase().includes(q)
+    );
+  }, [students, search]);
 
   return (
     <div className="monitor-app">
@@ -433,6 +474,7 @@ export default function AdminDashboard() {
           </div>
         </section>
       </main>
+      <ToastContainer toasts={toasts} removeToast={removeToast} />
     </div>
   );
 }

@@ -6,9 +6,10 @@ const rclone = require('../controllers/rclone.cjs');
 // Get active student
 router.get('/active', async (req, res) => {
   try {
-    const activeStudent = await Student.findOne({ status: 'active' });
+    const activeStudent = await Student.findOne({ status: 'active' }).lean();
     res.json(activeStudent);
   } catch (err) {
+    console.error('Get active error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -44,6 +45,7 @@ router.post('/active', async (req, res) => {
     
     res.json(student);
   } catch (err) {
+    console.error('Set active error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -63,9 +65,17 @@ router.post('/reorder', async (req, res) => {
     
     await Student.bulkWrite(bulkOps);
     
-    const students = await Student.find().sort({ queuePosition: 1 });
+    const students = await Student.find().sort({ queuePosition: 1 }).lean();
+
+    // Emit socket event for real-time sync (Fix 3)
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('queue_reordered', students);
+    }
+
     res.json(students);
   } catch (err) {
+    console.error('Reorder queue error:', err);
     res.status(500).json({ error: err.message });
   }
 });

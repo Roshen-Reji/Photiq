@@ -6,16 +6,27 @@ const { v4: uuidv4 } = require('uuid');
 // Get all students
 router.get('/', async (req, res) => {
   try {
-    const students = await Student.find().sort({ queuePosition: 1 });
-    // Backfill any missing digital_qr fields in legacy DB records
-    for (const student of students) {
-      if (!student.digital_qr) {
-        student.digital_qr = uuidv4();
-        await student.save();
-      }
+    const students = await Student.find().sort({ queuePosition: 1 }).lean();
+    
+    // Batch backfill any missing digital_qr fields in legacy DB records
+    const needsBackfill = students.filter(s => !s.digital_qr);
+    if (needsBackfill.length > 0) {
+      const bulkOps = needsBackfill.map(s => ({
+        updateOne: {
+          filter: { _id: s._id },
+          update: { $set: { digital_qr: uuidv4() } }
+        }
+      }));
+      await Student.bulkWrite(bulkOps);
+      
+      // Refresh to get updated values
+      const refreshed = await Student.find().sort({ queuePosition: 1 }).lean();
+      return res.json(refreshed);
     }
+    
     res.json(students);
   } catch (err) {
+    console.error('Fetch students error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -39,8 +50,21 @@ router.post('/', async (req, res) => {
     });
     
     await student.save();
+
+    // Emit socket event for real-time sync (Fix 3)
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('student_added', student);
+      io.emit('system_log', {
+        time: new Date().toLocaleTimeString(),
+        level: 'ok',
+        message: `STUDENT ADDED: ${student.name} (${student.student_id})`
+      });
+    }
+
     res.status(201).json(student);
   } catch (err) {
+    console.error('Add student error:', err);
     res.status(400).json({ error: err.message });
   }
 });
@@ -95,6 +119,17 @@ router.post('/import', async (req, res) => {
     await student.save();
     accepted.push(student);
   }
+
+  // Emit socket event for real-time sync (Fix 3)
+  const io = req.app.get('io');
+  if (io && accepted.length > 0) {
+    io.emit('students_imported', { count: accepted.length, students: accepted });
+    io.emit('system_log', {
+      time: new Date().toLocaleTimeString(),
+      level: 'ok',
+      message: `BATCH IMPORT: ${accepted.length} students added`
+    });
+  }
   
   res.status(201).json({ imported: accepted.length, rejected });
 });
@@ -104,8 +139,21 @@ router.delete('/:studentId', async (req, res) => {
   try {
     const student = await Student.findOneAndDelete({ student_id: req.params.studentId });
     if (!student) return res.status(404).json({ error: 'Student not found' });
+
+    // Emit socket event for real-time sync (Fix 3)
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('student_deleted', { student_id: req.params.studentId });
+      io.emit('system_log', {
+        time: new Date().toLocaleTimeString(),
+        level: 'warn',
+        message: `STUDENT REMOVED: ${student.name} (${student.student_id})`
+      });
+    }
+
     res.sendStatus(204);
   } catch (err) {
+    console.error('Delete student error:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -123,8 +171,16 @@ router.patch('/:studentId', async (req, res) => {
     if (id && id !== student.student_id) student.student_id = id;
     
     await student.save();
+
+    // Emit socket event for real-time sync (Fix 3)
+    const io = req.app.get('io');
+    if (io) {
+      io.emit('student_updated', student);
+    }
+
     res.json(student);
   } catch (err) {
+    console.error('Update student error:', err);
     res.status(400).json({ error: err.message });
   }
 });

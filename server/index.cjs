@@ -24,7 +24,12 @@ const rcloneDryRun = process.env.GRADSYNC_RCLONE_DRY_RUN === 'true';
 
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: true, methods: ['GET', 'POST', 'PATCH', 'DELETE'] } });
+const io = new Server(server, { 
+  cors: { origin: true, methods: ['GET', 'POST', 'PATCH', 'DELETE'] },
+  // Performance: increase ping interval to reduce overhead
+  pingInterval: 15000,
+  pingTimeout: 10000,
+});
 
 app.use(cors());
 app.use(express.json({ limit: '12mb' }));
@@ -43,23 +48,45 @@ app.get('/api/health', (req, res) => res.json({ ok: true, db: 'mongodb' }));
 // Attach IO to app for routes to use
 app.set('io', io);
 
+// Track connected clients for monitoring
+let connectedClients = 0;
+
 // Sockets
 io.on('connection', (socket) => {
-  console.log(`Client connected: ${socket.id}`);
+  connectedClients++;
+  console.log(`Client connected: ${socket.id} (${connectedClients} total)`);
   
   // Clients can ask for current state immediately upon connecting
   socket.on('request_state', async () => {
     try {
       const Student = require('./models/Student.cjs');
-      const activeStudent = await Student.findOne({ status: 'active' });
+      const Upload = require('./models/Upload.cjs');
+
+      const activeStudent = await Student.findOne({ status: 'active' }).lean();
       socket.emit('state_update', activeStudent);
+
+      // Also send recent unassigned photos for immediate monitor display
+      const unassigned = await Upload.find(
+        { student_id: 'UNASSIGNED' },
+        { preview_base64: 0 }
+      ).sort({ createdAt: -1 }).limit(50).lean();
+      socket.emit('unassigned_photos_sync', unassigned);
+
     } catch (err) {
       console.error('Socket state fetch error:', err);
     }
   });
 
+  // Allow student portal to join a room for their specific student
+  socket.on('join_student_room', (studentId) => {
+    if (studentId) {
+      socket.join(`student:${studentId}`);
+    }
+  });
+
   socket.on('disconnect', () => {
-    console.log(`Client disconnected: ${socket.id}`);
+    connectedClients--;
+    console.log(`Client disconnected: ${socket.id} (${connectedClients} total)`);
   });
 });
 
