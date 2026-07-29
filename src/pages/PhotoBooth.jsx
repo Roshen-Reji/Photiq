@@ -13,9 +13,14 @@ export default function PhotoBooth() {
   const [socketConnected, setSocketConnected] = useState(false);
   const [activeStudent, setActiveStudent] = useState(null);
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('gradsync_admin_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
   useEffect(() => {
     // Connect to sockets to listen to the queue
-    const socket = io(window.location.origin.includes('localhost') ? 'http://localhost:8787' : '/');
+    const socket = io();
     
     socket.on('connect', () => {
       setSocketConnected(true);
@@ -92,11 +97,12 @@ export default function PhotoBooth() {
 
   const fetchBoothSession = async () => {
     try {
-      const res = await fetch('/api/booth/active');
+      const res = await fetch('/api/booth/active', { headers: getAuthHeaders() });
       const data = await res.json();
-      setScannedStudents(data);
+      setScannedStudents(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
+      setScannedStudents([]);
     }
   };
 
@@ -104,21 +110,22 @@ export default function PhotoBooth() {
     try {
       await fetch('/api/booth/active', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ studentIds: studentsList.map(s => s.student_id) })
       });
-      setScannedStudents(studentsList);
+      setScannedStudents(Array.isArray(studentsList) ? studentsList : []);
     } catch (err) {
       console.error(err);
     }
   };
 
   const handleAddStudent = async (id) => {
-    if (!id || scannedStudents.find(s => s.student_id === id)) return;
+    const list = Array.isArray(scannedStudents) ? scannedStudents : [];
+    if (!id || list.find(s => s.student_id === id)) return;
     
     try {
       const newStudent = { student_id: id, name: activeStudent?.student_id === id ? activeStudent.name : 'Scanned User', department: 'QR Scan' };
-      const newList = [...scannedStudents, newStudent];
+      const newList = [...list, newStudent];
       await syncBoothSession(newList);
       setManualInput('');
     } catch(err) {
@@ -127,13 +134,17 @@ export default function PhotoBooth() {
   };
 
   const handleRemove = async (id) => {
-    const newList = scannedStudents.filter(s => s.student_id !== id);
+    const list = Array.isArray(scannedStudents) ? scannedStudents : [];
+    const newList = list.filter(s => s.student_id !== id);
     await syncBoothSession(newList);
   };
 
   const handleClearSession = async () => {
     try {
-      await fetch('/api/booth/clear', { method: 'POST' });
+      await fetch('/api/booth/clear', {
+        method: 'POST',
+        headers: getAuthHeaders()
+      });
       setScannedStudents([]);
     } catch (err) {
       console.error(err);

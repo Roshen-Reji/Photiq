@@ -4,7 +4,7 @@ import { io } from 'socket.io-client';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   Wifi, Activity, Server, Search, Upload, MoreHorizontal, 
-  Play, Pause, FastForward, Settings, HardDrive, Home 
+  Play, Pause, FastForward, Settings, HardDrive, Home, ExternalLink 
 } from 'lucide-react';
 
 export default function MonitorDashboard() {
@@ -23,18 +23,23 @@ export default function MonitorDashboard() {
   const dragItem = useRef();
   const dragOverItem = useRef();
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('gradsync_admin_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
   useEffect(() => {
-    fetch('/api/students')
+    fetch('/api/students', { headers: getAuthHeaders() })
       .then(res => res.json())
-      .then(data => setStudents(data))
-      .catch(err => console.error(err));
+      .then(data => setStudents(Array.isArray(data) ? data : []))
+      .catch(err => { console.error(err); setStudents([]); });
 
-    fetch('/api/uploads/unassigned')
+    fetch('/api/uploads/unassigned', { headers: getAuthHeaders() })
       .then(res => res.json())
-      .then(data => setUnassignedPhotos(data))
-      .catch(err => console.error(err));
+      .then(data => setUnassignedPhotos(Array.isArray(data) ? data : []))
+      .catch(err => { console.error(err); setUnassignedPhotos([]); });
 
-    const socket = io(window.location.origin.includes('localhost') ? 'http://localhost:8787' : '/');
+    const socket = io();
     
     socket.on('connect', () => {
       setSocketConnected(true);
@@ -58,11 +63,11 @@ export default function MonitorDashboard() {
     });
 
     socket.on('new_unassigned_photo', (photo) => {
-      setUnassignedPhotos(prev => [photo, ...prev]);
+      setUnassignedPhotos(prev => [photo, ...(Array.isArray(prev) ? prev : [])]);
     });
 
     socket.on('photo_assigned', (photo) => {
-      setUnassignedPhotos(prev => prev.filter(p => p._id !== photo._id));
+      setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p._id !== photo._id) : []);
     });
 
     return () => socket.disconnect();
@@ -72,15 +77,17 @@ export default function MonitorDashboard() {
     if (queuePaused) return; // Prevent advancing if paused
     const res = await fetch('/api/queue/active', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ studentId: id })
     });
     const updated = await res.json();
-    setActiveStudent(updated);
+    if (updated && !updated.error) {
+      setActiveStudent(updated);
+    }
   };
 
   const advanceQueue = (direction) => {
-    if (!students.length) return;
+    if (!Array.isArray(students) || !students.length) return;
     if (!activeStudent) {
       handleNext(students[0].student_id);
       return;
@@ -120,7 +127,7 @@ export default function MonitorDashboard() {
       const studentIds = newList.map(s => s.student_id);
       await fetch('/api/queue/reorder', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ studentIds })
       });
     }
@@ -147,25 +154,26 @@ export default function MonitorDashboard() {
     const photoId = e.dataTransfer.getData('photo_id');
     if (!photoId || !activeStudent) return;
     
-    setUnassignedPhotos(prev => prev.filter(p => p._id !== photoId));
+    setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p._id !== photoId) : []);
     
     try {
       await fetch(`/api/uploads/${photoId}/assign`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ studentId: activeStudent.student_id })
       });
     } catch (err) {
       console.error(err);
-      const res = await fetch('/api/uploads/unassigned');
-      setUnassignedPhotos(await res.json());
+      const res = await fetch('/api/uploads/unassigned', { headers: getAuthHeaders() });
+      const data = await res.json();
+      setUnassignedPhotos(Array.isArray(data) ? data : []);
     }
   };
 
-  const filteredStudents = students.filter(s => 
-    s.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-    s.student_id.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredStudents = Array.isArray(students) ? students.filter(s => 
+    (s.name || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+    (s.student_id || '').toLowerCase().includes(searchQuery.toLowerCase())
+  ) : [];
 
   return (
     <div className="monitor-app">
@@ -193,7 +201,7 @@ export default function MonitorDashboard() {
           <h1>CEREMONY CONTROL</h1>
         </div>
         <div className="title-actions">
-          <button className="ghost-control" disabled={!activeStudent} onClick={() => activeStudent && window.open(`/s/${activeStudent.digital_qr}`, '_blank')}>
+          <button className="ghost-control" disabled={!activeStudent} onClick={() => activeStudent && window.open(`/s/${activeStudent.digital_qr || activeStudent.student_id}`, '_blank')}>
             [ PORTAL ]
           </button>
           <button className="accent-control" onClick={() => setQueuePaused(!queuePaused)}>
@@ -246,8 +254,10 @@ export default function MonitorDashboard() {
                   <strong>{s.name.toUpperCase()}</strong>
                   <span>ID: {s.student_id} | {s.department}</span>
                 </div>
-                <div className="queue-item-actions">
-                  <button><MoreHorizontal size={14} /></button>
+                <div className="queue-item-actions" onClick={e => e.stopPropagation()}>
+                  <button title="View Profile" onClick={() => window.open(`/s/${s.digital_qr || s.student_id}`, '_blank')}>
+                    <ExternalLink size={14} />
+                  </button>
                 </div>
               </div>
             ))}
@@ -301,7 +311,7 @@ export default function MonitorDashboard() {
                 <div className="qr-zone">
                   <div className="qr-shell">
                     <QRCodeSVG 
-                      value={`${window.location.origin}/s/${activeStudent.digital_qr}`} 
+                      value={`${window.location.origin}/s/${activeStudent.digital_qr || activeStudent.student_id}`} 
                       size={132} 
                       level="L" 
                       includeMargin={false} 

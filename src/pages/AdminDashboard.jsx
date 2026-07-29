@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { read, utils } from 'xlsx';
 import jsQR from 'jsqr';
-import { Upload, Plus, Trash2, Edit2, Server, Search, Camera, CameraOff, Link2, Home } from 'lucide-react';
+import { Upload, Plus, Trash2, Edit2, Server, Search, Camera, CameraOff, Link2, Home, ExternalLink } from 'lucide-react';
 
 export default function AdminDashboard() {
   const [students, setStudents] = useState([]);
@@ -18,16 +18,25 @@ export default function AdminDashboard() {
   const videoRef = useRef(null);
   const canvasRef = useRef(null);
 
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('gradsync_admin_token');
+    return token ? { 'Authorization': `Bearer ${token}` } : {};
+  };
+
   useEffect(() => {
     fetchStudents();
   }, []);
 
   const fetchStudents = async () => {
     try {
-      const res = await fetch('/api/students');
-      setStudents(await res.json());
+      const res = await fetch('/api/students', {
+        headers: getAuthHeaders()
+      });
+      const data = await res.json();
+      setStudents(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error(err);
+      setStudents([]);
     }
   };
 
@@ -37,38 +46,128 @@ export default function AdminDashboard() {
 
     const reader = new FileReader();
     reader.onload = async (evt) => {
-      const bstr = evt.target.result;
-      const wb = read(bstr, { type: 'binary' });
-      const wsname = wb.SheetNames[0];
-      const ws = wb.Sheets[wsname];
-      const data = utils.sheet_to_json(ws, { header: 1 });
-      
-      if (!data || data.length < 2) return;
+      try {
+        const buffer = evt.target.result;
+        const dataArr = new Uint8Array(buffer);
+        const wb = read(dataArr, { type: 'array' });
+        const wsname = wb.SheetNames[0];
+        const ws = wb.Sheets[wsname];
 
-      const headers = data[0].map(h => String(h).toLowerCase().replace(/\s+/g, ''));
-      const idIdx = headers.findIndex(h => h.includes('id'));
-      const nameIdx = headers.findIndex(h => h.includes('name'));
-      const depIdx = headers.findIndex(h => h.includes('department') || h.includes('dept'));
+        const parsed = [];
 
-      if (idIdx === -1 || nameIdx === -1) {
-        alert("Could not find 'ID' or 'Name' columns in spreadsheet. Please ensure headers are present.");
-        return;
+        // Approach 1: Try JSON Objects mode (Header row detected by SheetJS)
+        const rawObjects = utils.sheet_to_json(ws, { defval: '' });
+        if (Array.isArray(rawObjects) && rawObjects.length > 0) {
+          rawObjects.forEach(obj => {
+            if (!obj || typeof obj !== 'object') return;
+
+            const keys = Object.keys(obj);
+            let nameKey = keys.find(k => /name|student|candidate|person|member|participant/i.test(k.trim()));
+            let idKey = keys.find(k => /id|roll|reg|code|sno|number/i.test(k.trim()));
+            let deptKey = keys.find(k => /dept|department|branch|class|course|stream/i.test(k.trim()));
+
+            let name = nameKey && obj[nameKey] !== undefined ? String(obj[nameKey]).trim() : '';
+
+            // If no key explicitly contains 'name', find the first non-numeric string value
+            if (!name) {
+              const firstStrKey = keys.find(k => {
+                const val = String(obj[k] || '').trim();
+                return val && isNaN(Number(val)) && val.length > 1;
+              });
+              if (firstStrKey) name = String(obj[firstStrKey]).trim();
+            }
+
+            if (!name) return; // Skip if no name extracted
+
+            const id = idKey && obj[idKey] !== undefined ? String(obj[idKey]).trim() : '';
+            const dept = deptKey && obj[deptKey] !== undefined ? String(obj[deptKey]).trim() : '';
+
+            parsed.push({ id, name, department: dept });
+          });
+        }
+
+        // Approach 2: Fallback to 2D Array mode if Object mode produced no valid students
+        if (parsed.length === 0) {
+          const rawRows = utils.sheet_to_json(ws, { header: 1, defval: '' });
+          if (Array.isArray(rawRows)) {
+            const cleanRows = rawRows.filter(r => Array.isArray(r) && r.some(cell => String(cell || '').trim() !== ''));
+            
+            if (cleanRows.length > 0) {
+              let hasHeader = false;
+              let idIdx = -1;
+              let nameIdx = -1;
+              let depIdx = -1;
+
+              const firstRow = cleanRows[0].map(c => String(c || '').toLowerCase().trim());
+              firstRow.forEach((col, idx) => {
+                const cleanCol = col.replace(/[^a-z0-9]/g, '');
+                if (cleanCol === 'id' || cleanCol.includes('id') || cleanCol.includes('roll') || cleanCol.includes('reg') || cleanCol.includes('code')) idIdx = idx;
+                if (cleanCol === 'name' || cleanCol.includes('name') || cleanCol.includes('student') || cleanCol.includes('candidate')) nameIdx = idx;
+                if (cleanCol.includes('dept') || cleanCol.includes('department') || cleanCol.includes('branch') || cleanCol.includes('class')) depIdx = idx;
+              });
+
+              if (nameIdx !== -1 || idIdx !== -1) hasHeader = true;
+              const rowsToProcess = hasHeader ? cleanRows.slice(1) : cleanRows;
+
+              if (nameIdx === -1) {
+                // Pick the column with most non-numeric text strings
+                let colScores = {};
+                cleanRows.forEach(row => {
+                  row.forEach((cell, idx) => {
+                    const val = String(cell || '').trim();
+                    if (val && isNaN(Number(val)) && val.length > 1) {
+                      colScores[idx] = (colScores[idx] || 0) + 1;
+                    }
+                  });
+                });
+                let bestCol = -1, maxScore = -1;
+                Object.keys(colScores).forEach(col => {
+                  if (colScores[col] > maxScore) { maxScore = colScores[col]; bestCol = Number(col); }
+                });
+                nameIdx = bestCol !== -1 ? bestCol : 0;
+              }
+
+              rowsToProcess.forEach(row => {
+                if (!row || !Array.isArray(row)) return;
+                const name = nameIdx !== -1 && row[nameIdx] !== undefined ? String(row[nameIdx]).trim() : '';
+                if (!name) return;
+                const id = idIdx !== -1 && row[idIdx] !== undefined ? String(row[idIdx]).trim() : '';
+                const dept = depIdx !== -1 && row[depIdx] !== undefined ? String(row[depIdx]).trim() : '';
+                parsed.push({ id, name, department: dept });
+              });
+            }
+          }
+        }
+
+        if (parsed.length === 0) {
+          alert("No valid student names found in the spreadsheet.");
+          return;
+        }
+
+        const res = await fetch('/api/students/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+          body: JSON.stringify({ students: parsed })
+        });
+        const result = await res.json();
+        
+        if (res.ok) {
+          let msg = `Successfully imported ${result.imported || 0} student(s)!`;
+          if (result.rejected && result.rejected.length > 0) {
+            msg += ` (${result.rejected.length} skipped: missing names)`;
+          }
+          alert(msg);
+        } else {
+          alert(result.error || 'Import failed');
+        }
+
+        fetchStudents();
+      } catch (err) {
+        console.error('XLSX import error:', err);
+        alert('Failed to parse spreadsheet file: ' + err.message);
       }
-
-      const parsed = data.slice(1).map(row => ({
-        id: row[idIdx],
-        name: row[nameIdx],
-        department: depIdx !== -1 ? row[depIdx] : ''
-      })).filter(s => s.id && s.name);
-
-      await fetch('/api/students/import', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ students: parsed })
-      });
-      fetchStudents();
     };
-    reader.readAsBinaryString(file);
+    reader.readAsArrayBuffer(file);
     e.target.value = null;
   };
 
@@ -79,13 +178,13 @@ export default function AdminDashboard() {
     if (editingStudent) {
       await fetch(`/api/students/${editingStudent.student_id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(formState)
       });
     } else {
       await fetch('/api/students', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(formState)
       });
     }
@@ -96,7 +195,10 @@ export default function AdminDashboard() {
 
   const handleDelete = async (id) => {
     if (!confirm(`Are you sure you want to delete student ${id}?`)) return;
-    await fetch(`/api/students/${id}`, { method: 'DELETE' });
+    await fetch(`/api/students/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders()
+    });
     fetchStudents();
   };
 
@@ -166,16 +268,16 @@ export default function AdminDashboard() {
   const assignPhysicalQR = async (studentId, qrData) => {
     await fetch(`/api/students/${studentId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ physical_qr: qrData })
     });
     fetchStudents();
   };
 
-  const filteredStudents = students.filter(s => 
-    s.name.toLowerCase().includes(search.toLowerCase()) || 
-    s.student_id.toLowerCase().includes(search.toLowerCase())
-  );
+  const filteredStudents = Array.isArray(students) ? students.filter(s => 
+    (s.name || '').toLowerCase().includes(search.toLowerCase()) || 
+    (s.student_id || '').toLowerCase().includes(search.toLowerCase())
+  ) : [];
 
   return (
     <div className="monitor-app">
@@ -322,8 +424,9 @@ export default function AdminDashboard() {
                 </div>
 
                 <div className="queue-item-actions" style={{ display: 'flex', gap: '4px', paddingLeft: '10px' }}>
-                  <button onClick={() => handleEdit(s)}><Edit2 size={13} /></button>
-                  <button onClick={() => handleDelete(s.student_id)} style={{ color: '#777' }}><Trash2 size={13} /></button>
+                  <button title="View Student Portal" onClick={() => window.open(`/s/${s.digital_qr || s.student_id}`, '_blank')} style={{ color: '#f05825' }}><ExternalLink size={13} /></button>
+                  <button title="Edit Student" onClick={() => handleEdit(s)}><Edit2 size={13} /></button>
+                  <button title="Delete Student" onClick={() => handleDelete(s.student_id)} style={{ color: '#777' }}><Trash2 size={13} /></button>
                 </div>
               </div>
             ))}
