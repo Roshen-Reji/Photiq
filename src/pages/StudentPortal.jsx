@@ -211,7 +211,7 @@ export default function StudentPortal() {
     }
     // If only preview is available, use the preview endpoint
     if (photo._upload_id && (photo._preview_ready || photo._source === 'preview')) {
-      return `/api/uploads/preview/${photo._upload_id}`;
+      return `/api/drive/${token}/preview/${photo._upload_id}`;
     }
     // Default: try direct photo endpoint
     return `/api/drive/${token}/photo/${photo.Path}`;
