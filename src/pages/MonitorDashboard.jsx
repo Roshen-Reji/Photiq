@@ -69,6 +69,7 @@ export default function MonitorDashboard() {
   // Drag and drop state for queue reordering
   const dragItem = useRef();
   const dragOverItem = useRef();
+  const pollIntervalRef = useRef(null);
   const socketRef = useRef(null);
 
   const getAuthHeaders = () => {
@@ -85,18 +86,30 @@ export default function MonitorDashboard() {
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [searchQuery]);
 
+  // Fetch unassigned photos (used for initial load + polling)
+  const fetchUnassigned = useCallback(async () => {
+    try {
+      const res = await fetch('/api/uploads/unassigned', { headers: getAuthHeaders() });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setUnassignedPhotos(Array.isArray(data) ? data : []);
+    } catch (err) {
+      console.error('Unassigned poll error:', err);
+    }
+  }, []);
+
   useEffect(() => {
     fetch('/api/students', { headers: getAuthHeaders() })
       .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
       .then(data => setStudents(Array.isArray(data) ? data : []))
       .catch(err => { console.error(err); addToast(`Failed to load students: ${err.message}`, 'error'); setStudents([]); });
 
-    fetch('/api/uploads/unassigned', { headers: getAuthHeaders() })
-      .then(res => { if (!res.ok) throw new Error(`HTTP ${res.status}`); return res.json(); })
-      .then(data => setUnassignedPhotos(Array.isArray(data) ? data : []))
-      .catch(err => { console.error(err); setUnassignedPhotos([]); });
+    fetchUnassigned();
 
-    const socket = io();
+    // Auto-poll unassigned photos every 2500ms for automatic dashboard refresh
+    pollIntervalRef.current = setInterval(fetchUnassigned, 2500);
+
+    const socket = io(window.location.origin);
     socketRef.current = socket;
     
     socket.on('connect', () => {
@@ -200,7 +213,10 @@ export default function MonitorDashboard() {
       if (Array.isArray(photos)) setUnassignedPhotos(photos);
     });
 
-    return () => socket.disconnect();
+    return () => {
+      socket.disconnect();
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
   }, []);
 
   const handleNext = useCallback(async (id) => {
@@ -625,6 +641,15 @@ export default function MonitorDashboard() {
                         style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
                         draggable={false}
                         loading="lazy"
+                        onError={(e) => {
+                          if (!e.target.dataset.retried) {
+                            e.target.dataset.retried = 'true';
+                            e.target.src = `/api/uploads/stream/${photo._id}?t=${Date.now()}`;
+                          } else {
+                            e.target.style.display = 'none';
+                            e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
+                          }
+                        }}
                       />
                     ) : (
                       <img 
@@ -633,6 +658,15 @@ export default function MonitorDashboard() {
                         style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
                         draggable={false}
                         loading="lazy"
+                        onError={(e) => {
+                          if (!e.target.dataset.retried) {
+                            e.target.dataset.retried = 'true';
+                            e.target.src = `/api/uploads/preview/${photo._id}`;
+                          } else {
+                            e.target.style.display = 'none';
+                            e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
+                          }
+                        }}
                       />
                     )}
                     <div style={{ width: '100%', padding: '4px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>

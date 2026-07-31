@@ -45,8 +45,21 @@ app.use('/api/drive', driveRoute); // Drive is public for students, secured by U
 // Simple health endpoint
 app.get('/api/health', (req, res) => res.json({ ok: true, db: 'mongodb' }));
 
+// Static uploads directory — serve local images directly (Fix: local-first)
+const uploadsDir = path.join(__dirname, '..', 'data', 'uploads');
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+app.use('/uploads', (req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+  next();
+}, express.static(uploadsDir));
+
 // Attach IO to app for routes to use
 app.set('io', io);
+
+// Share uploadsDir path with routes
+app.set('uploadsDir', uploadsDir);
 
 // Track connected clients for monitoring
 let connectedClients = 0;
@@ -94,9 +107,9 @@ async function boot() {
   const dist = path.join(__dirname, '..', 'dist');
   if (fs.existsSync(dist)) {
     app.use(express.static(dist));
-    app.use((req, res, next) => req.path.startsWith('/api') || req.path.startsWith('/socket.io') ? next() : res.sendFile(path.join(dist, 'index.html')));
+    app.use((req, res, next) => req.path.startsWith('/api') || req.path.startsWith('/socket.io') || req.path.startsWith('/uploads') ? next() : res.sendFile(path.join(dist, 'index.html')));
   }
-  server.listen(port, () => console.log(`GradSync server listening on http://127.0.0.1:${port}`));
+  server.listen(port, '0.0.0.0', () => console.log(`GradSync server listening on http://0.0.0.0:${port}`));
 }
 
 boot().catch((error) => { console.error(error); process.exitCode = 1; });

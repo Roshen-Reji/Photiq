@@ -11,6 +11,7 @@ const uploadSchema = new mongoose.Schema({
     enum: ['pending', 'preview_uploading', 'preview_ready', 'uploading_original', 'completed', 'failed', 'retrying']
   },
   rclone_path: { type: String },
+  localPath: { type: String }, // Absolute path to local file on disk (local-first serving)
   error_log: { type: String },
   drive_url: { type: String },
   // Preview image support (Fix 1 & 2)
