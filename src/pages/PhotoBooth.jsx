@@ -20,7 +20,7 @@ export default function PhotoBooth() {
 
   useEffect(() => {
     // Connect to sockets to listen to the queue
-    const socket = io();
+    const socket = io(window.location.origin);
     
     socket.on('connect', () => {
       setSocketConnected(true);

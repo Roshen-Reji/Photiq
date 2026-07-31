@@ -1,235 +1,356 @@
-# Performance & Bug Fix Request
+# FIX.md
 
-This is **not a UI redesign**. Focus only on fixing bugs, improving performance, reducing latency, and making the system reliable.
+## Objective
 
-## 1. Image Upload Pipeline
+Resolve all networking, upload, preview, download, and synchronization issues in the Photiq platform.
 
-The current image upload system is slow and unreliable.
-
-### Required behavior
-
-* As soon as the photographer captures an image, begin uploading immediately.
-* If the upload takes too long, automatically generate a compressed preview image (WebP/JPEG at lower quality) and send that to the Monitor Dashboard for instant viewing.
-* Continue uploading the original full-resolution image to Google Drive in the background.
-* Never wait for the full-resolution upload before updating the UI.
-* The monitor should always see the preview almost instantly.
-
-Implement:
-
-* Background uploads
-* Progressive uploads
-* Retry mechanism on failure
-* Upload queue
-* Upload progress tracking
-* Automatic retry with exponential backoff
-* Offline recovery if the network drops
+The system must always prioritize local files and should never block the user interface while background cloud synchronization is occurring.
 
 ---
 
-## 2. Separate Preview and Original Images
+# Critical Issues
 
-Implement two image versions:
+## 1. Student Portal
 
-### Preview Image
-
-* Small size
-* Compressed
-* Optimized for speed
-* Used only inside:
-
-  * Monitor Dashboard
-  * Student Portal live preview
-  * Camera Dashboard
-
-### Original Image
-
-* Full resolution
-* Stored in Google Drive
-* Never compressed
-* Used for downloading and final delivery
-
-The preview should appear immediately while the original continues uploading in the background.
-
----
-
-## 3. Live Synchronization
-
-Currently updates are delayed.
-
-Replace polling wherever possible with real-time synchronization.
-
-Use:
-
-* WebSockets
-* Firebase realtime listeners
-* Supabase realtime
-* Server-Sent Events
-
-(Use whichever best matches the existing stack.)
-
-Whenever:
-
-* a photo is uploaded,
-* a student changes,
-* upload completes,
-* image status changes,
-
-every connected device should update instantly without refreshing.
-
----
-
-## 4. Student Portal Delay
+### Blank "Syncing..." Card
 
 Problem:
-The Student Portal linked to the Drive account shows the image after a long delay.
+- Students see an empty card while Google Drive/rclone syncing is in progress.
+- Image preview is hidden until sync completes.
 
-Fix:
+Required Fix:
+- Never hide the image because of sync status.
+- Always render the local image immediately.
+- Sync status should only be a small badge.
+- Download button must remain available at all times.
 
-* Remove unnecessary waiting.
-* Cache metadata.
-* Update immediately after upload.
-* Show the compressed preview first.
-* Automatically replace it with the original once available.
+Expected Behaviour
 
-Target:
-Student should see the image within 1–2 seconds.
+✔ Local image appears instantly.
 
----
+✔ "Cloud Syncing..." badge is only informational.
 
-## 5. Student Portal on Other Devices
-
-Current issue:
-On another laptop, the same student's portal shows **0 images** even though the image exists.
-
-Investigate and fix:
-
-* Authentication issues
-* Drive permission problems
-* Cache invalidation
-* Database synchronization
-* API response issues
-* Firestore/Database listeners
-* CORS problems
-* State management bugs
-
-The portal should display the same images on every authorized device.
+✔ Download works immediately even before Drive sync completes.
 
 ---
 
-## 6. Monitor Dashboard
+### Broken Downloads on Other Devices
 
-Current issue:
-The "Add Node" button does nothing.
+Problem
 
-Fix:
+The frontend still contains localhost or 127.0.0.1 URLs.
 
-* Restore full functionality.
-* Verify event listeners.
-* Verify backend API.
-* Verify state updates.
-* Display proper success/error messages.
-* Remove silent failures.
+External laptops attempt to download from their own localhost instead of the server.
 
----
+Required Fix
 
-## 7. Performance Optimization
+- Remove every hardcoded localhost reference.
+- Remove every hardcoded 127.0.0.1 reference from frontend pages.
+- Use VITE_API_BASE_URL or relative URLs.
+- Downloads should always point to backend endpoints.
 
-Optimize the entire application.
+Search Entire Repository For
 
-Reduce:
+http://localhost
 
-* Initial load time
-* API latency
-* Image loading time
-* Re-renders
-* Memory usage
-* Network requests
+https://localhost
 
-Implement:
+127.0.0.1
 
-* Lazy loading
-* Image caching
-* Browser caching
-* Memoization
-* Code splitting
-* Debouncing where necessary
-* Optimized database queries
-* Batched writes
-* Parallel uploads where appropriate
+Replace with
+
+```
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '';
+```
 
 ---
 
-## 8. Real-Time Status Indicators
+# 2. Admin Dashboard
 
-Display live status for every upload:
+## Upload Delay
 
-* Waiting
-* Uploading Preview
-* Preview Ready
-* Uploading Original
-* Upload Complete
-* Failed
-* Retrying
+Problem
 
-Users should always know what is happening.
+New uploads only appear after several seconds because uploads wait for cloud operations.
 
----
+Required Fix
 
-## 9. Error Handling
+Upload flow must become:
 
-Never fail silently.
+Camera Capture
 
-If something fails:
+↓
 
-* Show meaningful error messages.
-* Retry automatically.
-* Log detailed errors.
-* Recover gracefully.
-* Keep the UI responsive.
+Save locally
 
----
+↓
 
-## 10. Responsiveness
+Insert MongoDB record
 
-Ensure every page works smoothly on:
+↓
 
-* Desktop
-* Laptop
-* Tablet
-* Mobile
+Return HTTP response immediately
 
-Eliminate layout shifts and UI freezes.
+↓
+
+Background Drive Sync
+
+The API must never wait for:
+
+- rclone
+- Google Drive
+- Compression
+- Any cloud operation
 
 ---
 
-## 11. Code Quality
+## Slow Refresh
 
-Refactor any inefficient code.
+Replace manual refreshes with automatic polling.
 
-Remove:
+Requirements
 
-* Duplicate logic
-* Unused API calls
-* Blocking operations
-* Memory leaks
-* Race conditions
+Poll:
 
-Improve maintainability without changing functionality.
+```
+/api/uploads/unassigned
+```
+
+every
+
+```
+2500ms
+```
+
+Refresh without page reload.
 
 ---
 
-## 12. Final Objective
+## Broken Image Icons
 
-The application should feel instantaneous.
+Problem
 
-Expected workflow:
+Image previews show broken placeholders while files are still writing.
 
-1. Photographer captures image.
-2. Compressed preview uploads immediately.
-3. Monitor Dashboard updates live.
-4. Student Portal updates live.
-5. Original image uploads to Google Drive in the background.
-6. Preview is automatically replaced with the original once upload completes.
-7. Every connected device stays synchronized in real time.
+Required Fix
 
-The entire system should be fast, responsive, reliable, fault-tolerant, and production-ready while preserving all existing functionality.
+Every preview image must have
+
+```
+onError
+```
+
+fallback handling.
+
+The UI should gracefully retry or display a fallback image instead of a broken browser icon.
+
+---
+
+# 3. Backend
+
+## Local Preview First
+
+Preview endpoints must always check:
+
+1. Local disk
+2. Drive fallback
+
+Never:
+
+Drive
+
+↓
+
+Local
+
+Correct priority:
+
+Local
+
+↓
+
+Drive
+
+---
+
+## Download Endpoint
+
+Downloads must:
+
+- stream local files
+- use attachment headers
+- only redirect to Drive if the local file no longer exists
+
+---
+
+## Path Normalization
+
+Every stored path must use:
+
+```
+/
+```
+
+Never
+
+```
+\
+```
+
+Normalize every
+
+```
+localPath
+
+filePath
+```
+
+before storage and before serving.
+
+---
+
+## Static Uploads
+
+Expose uploads directory using Express static middleware.
+
+Requirements
+
+- CORS enabled
+- Cache disabled
+- Cross-Origin Resource Policy configured
+
+---
+
+# 4. Networking
+
+Server must listen on
+
+```
+0.0.0.0
+```
+
+NOT
+
+```
+127.0.0.1
+```
+
+NOT
+
+```
+localhost
+```
+
+Reason
+
+Other laptops on the LAN must reach both:
+
+- API
+- Uploads
+- Preview endpoints
+
+---
+
+# 5. Vite
+
+Development server requirements
+
+```
+host: "0.0.0.0"
+```
+
+Proxy
+
+```
+/api
+/uploads
+```
+
+to backend automatically.
+
+---
+
+# Code Cleanup
+
+Search the entire repository for:
+
+- localhost
+- 127.0.0.1
+- absolute API URLs
+
+Replace them with environment-based URLs.
+
+---
+
+# Acceptance Tests
+
+## Student Portal
+
+- Local image appears instantly.
+- Download works during syncing.
+- No blank syncing cards.
+- Sync badge is informational only.
+
+---
+
+## Admin Dashboard
+
+- New uploads appear within 2.5 seconds.
+- No broken preview icons.
+- Images load immediately after capture.
+- Dashboard updates automatically.
+
+---
+
+## Backend
+
+- Preview endpoint returns local image immediately.
+- Download endpoint serves local file.
+- Drive used only as fallback.
+- Upload API responds immediately after local save.
+
+---
+
+## Networking
+
+Verify from another laptop:
+
+```
+http://<LAN-IP>:5173
+```
+
+Requirements
+
+- Dashboard loads.
+- Student Portal loads.
+- Images render.
+- Downloads succeed.
+- No CORS errors.
+- No localhost requests.
+
+---
+
+## Code Quality Requirements
+
+The implementation must:
+
+- Preserve existing functionality.
+- Avoid introducing breaking API changes.
+- Maintain backward compatibility.
+- Keep cloud synchronization asynchronous.
+- Prioritize local responsiveness over cloud completion.
+- Log errors without blocking the user interface.
+
+---
+
+# Completion Criteria
+
+The task is complete only when:
+
+- No hardcoded localhost references remain.
+- Images render immediately after capture.
+- Student downloads work during syncing.
+- Admin Dashboard updates automatically.
+- External devices work over LAN.
+- Local storage is always prioritized over cloud storage.
+- All acceptance tests pass successfully.

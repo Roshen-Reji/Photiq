@@ -4,7 +4,7 @@
   "description": "Graduation queue, QR, and photo-routing controller",
   "main": "index.js",
   "scripts": {
-    "dev": "vite",
+    "dev": "vite --host",
     "server": "node server/index.cjs",
     "start": "node server/index.cjs",
     "local": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npx wait-on tcp:8787 && npm run dev\"",

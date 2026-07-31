@@ -18,8 +18,8 @@ export default function StudentPortal() {
   useEffect(() => {
     fetchData();
 
-    // Connect to Socket.IO for real-time updates (Fix 3 & 4)
-    const socket = io();
+    // Connect to Socket.IO for real-time updates
+    const socket = io(window.location.origin);
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -32,8 +32,7 @@ export default function StudentPortal() {
 
     // Listen for preview ready — new photo available instantly
     socket.on('preview_ready', (data) => {
-      if (!studentInfo) return; // Wait until we know the student
-      // Will be handled after studentInfo is set
+      if (!studentInfo) return;
     });
 
     // Listen for original ready — swap preview with original
@@ -48,7 +47,6 @@ export default function StudentPortal() {
 
     // Listen for photo assigned to this student
     socket.on('photo_assigned', (upload) => {
-      // Refresh photos when a photo is assigned
       if (studentInfo && upload.student_id === studentInfo.student_id) {
         fetchPhotos();
       }
@@ -189,13 +187,15 @@ export default function StudentPortal() {
   };
 
   const handleDownloadAll = () => {
-    window.location.href = `/api/drive/${token}/download`;
+    window.location.href = `${window.location.origin}/api/drive/${token}/download`;
   };
 
-  const handleDownloadSingle = (filename) => {
+  // Download single photo — always works, falls back to preview if original not ready
+  const handleDownloadSingle = (photo) => {
     const link = document.createElement('a');
-    link.href = `/api/drive/${token}/photo/${filename}`;
-    link.download = filename;
+    // Drive photo endpoint is public (secured by token) and handles local-first fallback
+    link.href = `/api/drive/${token}/photo/${photo.Path}`;
+    link.download = photo.Path || photo.Name || 'photo.jpg';
     link.target = '_blank';
     document.body.appendChild(link);
     link.click();
@@ -204,17 +204,40 @@ export default function StudentPortal() {
 
   // Determine image source based on availability
   const getImageSrc = (photo) => {
-    // If original is on Drive, use the direct streaming endpoint
-    if (photo._original_ready || photo._source === 'drive') {
-      const refreshParam = photo._refreshKey ? `?t=${photo._refreshKey}` : '';
-      return `/api/drive/${token}/photo/${photo.Path}${refreshParam}`;
+    const refreshParam = photo._refreshKey ? `?t=${photo._refreshKey}` : '';
+    return `/api/drive/${token}/photo/${photo.Path}${refreshParam}`;
+  };
+
+  // Image error handler — retry with preview endpoint or show placeholder
+  const handleImageError = (e, photo) => {
+    const img = e.target;
+    if (img.dataset.retried) return; // Don't loop
+    img.dataset.retried = 'true';
+    
+    // Try the preview endpoint directly if we have an upload ID
+    if (photo._upload_id) {
+      img.src = `/api/drive/${token}/preview/${photo._upload_id}`;
+    } else {
+      // Show a gradient placeholder instead of broken icon
+      img.style.display = 'none';
+      if (img.parentElement) {
+        img.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
+      }
     }
-    // If only preview is available, use the preview endpoint
-    if (photo._upload_id && (photo._preview_ready || photo._source === 'preview')) {
-      return `/api/drive/${token}/preview/${photo._upload_id}`;
+  };
+
+  // Get sync status info for a photo
+  const getSyncBadge = (photo) => {
+    if (photo._status === 'completed' || photo._original_ready || photo._source === 'drive') {
+      return null; // Fully synced, no badge needed
     }
-    // Default: try direct photo endpoint
-    return `/api/drive/${token}/photo/${photo.Path}`;
+    if (photo._status === 'uploading_original') {
+      return { label: 'CLOUD SYNCING', color: '#f0a830' };
+    }
+    if (photo._source === 'preview' && !photo._original_ready) {
+      return { label: 'PREVIEW', color: '#f0a830' };
+    }
+    return null;
   };
 
   return (
@@ -269,38 +292,64 @@ export default function StudentPortal() {
         )}
 
         <div className="photo-grid">
-          {photos.map((p, i) => (
-            <figure 
-              key={p._upload_id || p.Path || i} 
-              className={`gallery-card ${p.style}`} 
-              style={{ 
-                backgroundImage: `url(${getImageSrc(p)})`, 
-                backgroundSize: 'cover', 
-                backgroundPosition: 'center',
-                position: 'relative',
-              }}
-            >
-              <div className="image-grain"></div>
-              {/* Preview badge */}
-              {p._source === 'preview' && !p._original_ready && (
-                <div style={{
-                  position: 'absolute', top: '8px', right: '8px',
-                  background: 'rgba(240, 168, 48, 0.9)', color: '#111',
-                  fontSize: '8px', padding: '2px 6px', borderRadius: '3px',
-                  fontWeight: 'bold', letterSpacing: '0.5px',
-                }}>
-                  PREVIEW
-                </div>
-              )}
-              <figcaption>
-                <span>{p.Path}</span>
-                <strong>{p.Size ? `${(p.Size / 1024 / 1024).toFixed(1)} MB` : 'Syncing...'}</strong>
-                <button onClick={() => handleDownloadSingle(p.Path)} disabled={!p._original_ready && p._source === 'preview'}>
-                  <Download size={14} />
-                </button>
-              </figcaption>
-            </figure>
-          ))}
+          {photos.map((p, i) => {
+            const badge = getSyncBadge(p);
+            return (
+              <figure 
+                key={p._upload_id || p.Path || i} 
+                className={`gallery-card ${p.style}`} 
+                style={{ 
+                  backgroundImage: `url(${getImageSrc(p)})`, 
+                  backgroundSize: 'cover', 
+                  backgroundPosition: 'center',
+                  position: 'relative',
+                }}
+              >
+                {/* Hidden img for error handling — triggers fallback on load failure */}
+                <img 
+                  src={getImageSrc(p)} 
+                  alt="" 
+                  style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0 }}
+                  onError={(e) => {
+                    // Update the figure background on error
+                    const figure = e.target.closest('figure');
+                    if (figure && !e.target.dataset.retried) {
+                      e.target.dataset.retried = 'true';
+                      if (p._upload_id) {
+                        const fallbackSrc = `/api/drive/${token}/preview/${p._upload_id}`;
+                        figure.style.backgroundImage = `url(${fallbackSrc})`;
+                      } else {
+                        figure.style.backgroundImage = 'none';
+                        figure.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
+                      }
+                    }
+                  }}
+                />
+                <div className="image-grain"></div>
+                {/* Sync badge — informational only, never blocks the image */}
+                {badge && (
+                  <div style={{
+                    position: 'absolute', top: '8px', right: '8px',
+                    background: `rgba(${badge.color === '#f0a830' ? '240, 168, 48' : '117, 219, 166'}, 0.9)`, color: '#111',
+                    fontSize: '8px', padding: '2px 6px', borderRadius: '3px',
+                    fontWeight: 'bold', letterSpacing: '0.5px',
+                  }}>
+                    {badge.label}
+                  </div>
+                )}
+                <figcaption>
+                  <span>{p.Path}</span>
+                  <strong>
+                    {p.Size ? `${(p.Size / 1024 / 1024).toFixed(1)} MB` : (badge ? badge.label : 'READY')}
+                  </strong>
+                  {/* Download button — ALWAYS AVAILABLE, never disabled */}
+                  <button onClick={() => handleDownloadSingle(p)}>
+                    <Download size={14} />
+                  </button>
+                </figcaption>
+              </figure>
+            );
+          })}
         </div>
       </main>
 

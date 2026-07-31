@@ -1,8 +1,16 @@
 const express = require('express');
 const router = express.Router();
+const path = require('node:path');
+const fs = require('node:fs');
 const Upload = require('../models/Upload.cjs');
 const Student = require('../models/Student.cjs');
 const rclone = require('../controllers/rclone.cjs');
+
+// Normalize paths: always use forward slashes
+function normalizePath(p) {
+  if (!p) return p;
+  return p.replace(/\\/g, '/');
+}
 
 // The agent requests an upload intent
 router.post('/intent', async (req, res) => {
@@ -30,6 +38,7 @@ router.post('/intent', async (req, res) => {
       source: source || 'stage',
       camera_id: camera || 'unknown',
       rclone_path: `${rcloneDestination}/${filename}`,
+      localPath: normalizePath(localPath) || null, // Store normalized local path
       status: previewBase64 ? 'preview_ready' : 'pending',
       preview_base64: previewBase64 || null,
       preview_ready: !!previewBase64,
@@ -73,6 +82,7 @@ router.post('/intent', async (req, res) => {
       }
     }
 
+    // Return immediately — never wait for cloud operations
     res.json({
       uploadId: upload._id,
       rcloneDestination
@@ -206,32 +216,53 @@ router.get('/preview/:id', async (req, res) => {
   }
 });
 
-// Stream a photo by upload ID (serves original if available, falls back to preview)
+// Helper: try to serve a local file, returns true if successful
+function tryServeLocalFile(localPath, res) {
+  if (!localPath) return false;
+  const normalized = normalizePath(localPath);
+  try {
+    if (fs.existsSync(normalized)) {
+      const ext = path.extname(normalized).toLowerCase();
+      const isPng = ext === '.png';
+      res.setHeader('Content-Type', isPng ? 'image/png' : 'image/jpeg');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+      const stat = fs.statSync(normalized);
+      res.setHeader('Content-Length', stat.size);
+      fs.createReadStream(normalized).pipe(res);
+      return true;
+    }
+  } catch (err) {
+    console.error(`Local file serve error for ${normalized}: ${err.message}`);
+  }
+  return false;
+}
+
+// Stream a photo by upload ID — LOCAL FIRST, then preview, then Drive
 router.get('/stream/:id', async (req, res) => {
   try {
     const upload = await Upload.findById(req.params.id);
     if (!upload) return res.status(404).send('Not found');
 
-    // Set content type so the UI renders it as an image correctly
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    
-    // If original is ready on Drive, stream it
-    if (upload.original_ready && upload.rclone_path) {
-      rclone.streamPhotoByPath(upload.rclone_path, res);
+    // 1. LOCAL FIRST: Try serving from local disk
+    if (upload.localPath && tryServeLocalFile(upload.localPath, res)) {
       return;
     }
 
-    // Fallback: serve the preview if available
+    // 2. PREVIEW FALLBACK: Serve the preview if available
     if (upload.preview_base64) {
       const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=3600');
       res.setHeader('Content-Length', imgBuffer.length);
       res.send(imgBuffer);
       return;
     }
 
-    // Last resort: try streaming from rclone path anyway
+    // 3. DRIVE FALLBACK: Stream from rclone if available
     if (upload.rclone_path) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
       rclone.streamPhotoByPath(upload.rclone_path, res);
       return;
     }
@@ -239,6 +270,52 @@ router.get('/stream/:id', async (req, res) => {
     res.status(404).send('No image available');
   } catch (err) {
     console.error('Stream error:', err);
+    if (!res.headersSent) res.status(500).send(err.message);
+  }
+});
+
+// Download a photo by upload ID — LOCAL FIRST with attachment header
+router.get('/download/:id', async (req, res) => {
+  try {
+    const upload = await Upload.findById(req.params.id);
+    if (!upload) return res.status(404).send('Not found');
+
+    res.setHeader('Content-Disposition', `attachment; filename="${upload.filename}"`);
+
+    // 1. LOCAL FIRST
+    if (upload.localPath) {
+      const normalized = normalizePath(upload.localPath);
+      try {
+        if (fs.existsSync(normalized)) {
+          const ext = path.extname(normalized).toLowerCase();
+          res.setHeader('Content-Type', ext === '.png' ? 'image/png' : 'image/jpeg');
+          const stat = fs.statSync(normalized);
+          res.setHeader('Content-Length', stat.size);
+          fs.createReadStream(normalized).pipe(res);
+          return;
+        }
+      } catch (e) { /* fall through */ }
+    }
+
+    // 2. PREVIEW FALLBACK
+    if (upload.preview_base64) {
+      const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Content-Length', imgBuffer.length);
+      res.send(imgBuffer);
+      return;
+    }
+
+    // 3. DRIVE FALLBACK
+    if (upload.rclone_path) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      rclone.streamPhotoByPath(upload.rclone_path, res);
+      return;
+    }
+
+    res.status(404).send('No image available for download');
+  } catch (err) {
+    console.error('Download error:', err);
     if (!res.headersSent) res.status(500).send(err.message);
   }
 });
