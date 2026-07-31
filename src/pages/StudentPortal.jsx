@@ -193,13 +193,8 @@ export default function StudentPortal() {
   // Download single photo — always works, falls back to preview if original not ready
   const handleDownloadSingle = (photo) => {
     const link = document.createElement('a');
-    // If we have an upload ID and the file is available via the stream/download endpoint, use it
-    if (photo._upload_id) {
-      link.href = `/api/uploads/download/${photo._upload_id}`;
-    } else {
-      // Fallback to drive photo endpoint  
-      link.href = `/api/drive/${token}/photo/${photo.Path}`;
-    }
+    // Drive photo endpoint is public (secured by token) and handles local-first fallback
+    link.href = `/api/drive/${token}/photo/${photo.Path}`;
     link.download = photo.Path || photo.Name || 'photo.jpg';
     link.target = '_blank';
     document.body.appendChild(link);
@@ -207,20 +202,10 @@ export default function StudentPortal() {
     document.body.removeChild(link);
   };
 
-  // Determine image source based on availability — always returns a valid URL
+  // Determine image source based on availability
   const getImageSrc = (photo) => {
-    // If we have an upload ID, use the stream endpoint (handles local-first internally)
-    if (photo._upload_id) {
-      const refreshParam = photo._refreshKey ? `?t=${photo._refreshKey}` : '';
-      return `/api/uploads/stream/${photo._upload_id}${refreshParam}`;
-    }
-    // If original is on Drive, use the direct streaming endpoint
-    if (photo._original_ready || photo._source === 'drive') {
-      const refreshParam = photo._refreshKey ? `?t=${photo._refreshKey}` : '';
-      return `/api/drive/${token}/photo/${photo.Path}${refreshParam}`;
-    }
-    // Default: try direct photo endpoint
-    return `/api/drive/${token}/photo/${photo.Path}`;
+    const refreshParam = photo._refreshKey ? `?t=${photo._refreshKey}` : '';
+    return `/api/drive/${token}/photo/${photo.Path}${refreshParam}`;
   };
 
   // Image error handler — retry with preview endpoint or show placeholder
@@ -229,7 +214,7 @@ export default function StudentPortal() {
     if (img.dataset.retried) return; // Don't loop
     img.dataset.retried = 'true';
     
-    // Try the preview endpoint as fallback
+    // Try the preview endpoint directly if we have an upload ID
     if (photo._upload_id) {
       img.src = `/api/drive/${token}/preview/${photo._upload_id}`;
     } else {

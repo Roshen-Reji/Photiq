@@ -644,7 +644,7 @@ export default function MonitorDashboard() {
                         onError={(e) => {
                           if (!e.target.dataset.retried) {
                             e.target.dataset.retried = 'true';
-                            e.target.src = `/api/uploads/stream/${photo._id}?t=${Date.now()}`;
+                            e.target.src = `/api/uploads/stream/${photo._id}?token=${localStorage.getItem('gradsync_admin_token')}&t=${Date.now()}`;
                           } else {
                             e.target.style.display = 'none';
                             e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
@@ -653,7 +653,7 @@ export default function MonitorDashboard() {
                       />
                     ) : (
                       <img 
-                        src={`/api/uploads/stream/${photo._id}${photo._refreshKey ? `?t=${photo._refreshKey}` : ''}`} 
+                        src={`/api/uploads/stream/${photo._id}?token=${localStorage.getItem('gradsync_admin_token')}${photo._refreshKey ? `&t=${photo._refreshKey}` : ''}`} 
                         alt={photo.filename} 
                         style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
                         draggable={false}
@@ -661,7 +661,7 @@ export default function MonitorDashboard() {
                         onError={(e) => {
                           if (!e.target.dataset.retried) {
                             e.target.dataset.retried = 'true';
-                            e.target.src = `/api/uploads/preview/${photo._id}`;
+                            e.target.src = `/api/uploads/preview/${photo._id}?token=${localStorage.getItem('gradsync_admin_token')}`;
                           } else {
                             e.target.style.display = 'none';
                             e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
