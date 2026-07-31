@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
+import { resolveImageUrl } from '../utils/imageUrl';
 
 // Status badge colors
 const STATUS_COLORS = {
@@ -109,7 +110,7 @@ export default function MonitorDashboard() {
     // Auto-poll unassigned photos every 2500ms for automatic dashboard refresh
     pollIntervalRef.current = setInterval(fetchUnassigned, 2500);
 
-    const socket = io(window.location.origin);
+    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
     socketRef.current = socket;
     
     socket.on('connect', () => {
@@ -634,38 +635,16 @@ export default function MonitorDashboard() {
                           </div>
                         )}
                       </div>
-                    ) : photo.preview_ready && photo.preview_base64 ? (
-                      <img 
-                        src={`data:image/jpeg;base64,${photo.preview_base64}`}
-                        alt={photo.filename} 
-                        style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
-                        draggable={false}
-                        loading="lazy"
-                        onError={(e) => {
-                          if (!e.target.dataset.retried) {
-                            e.target.dataset.retried = 'true';
-                            e.target.src = `/api/uploads/stream/${photo._id}?token=${localStorage.getItem('gradsync_admin_token')}&t=${Date.now()}`;
-                          } else {
-                            e.target.style.display = 'none';
-                            e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
-                          }
-                        }}
-                      />
                     ) : (
                       <img 
-                        src={`/api/uploads/stream/${photo._id}?token=${localStorage.getItem('gradsync_admin_token')}${photo._refreshKey ? `&t=${photo._refreshKey}` : ''}`} 
+                        src={resolveImageUrl(photo)} 
                         alt={photo.filename} 
                         style={{ width: '100%', height: '60px', objectFit: 'cover' }} 
                         draggable={false}
                         loading="lazy"
                         onError={(e) => {
-                          if (!e.target.dataset.retried) {
-                            e.target.dataset.retried = 'true';
-                            e.target.src = `/api/uploads/preview/${photo._id}?token=${localStorage.getItem('gradsync_admin_token')}`;
-                          } else {
-                            e.target.style.display = 'none';
-                            e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
-                          }
+                          e.target.style.display = 'none';
+                          e.target.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
                         }}
                       />
                     )}

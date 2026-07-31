@@ -31,7 +31,7 @@ export default function AdminDashboard() {
     fetchStudents();
 
     // Socket.IO real-time sync (Fix 3)
-    const socket = io(window.location.origin);
+    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
     socket.on('student_added', (student) => {
       setStudents(prev => [...prev, student]);
     });
