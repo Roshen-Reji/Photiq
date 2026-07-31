@@ -4,6 +4,68 @@ import { Download, Share2, Grid, RefreshCw } from 'lucide-react';
 import { io } from 'socket.io-client';
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
+import { resolveImageUrl, resolveCdnThumbnailUrl } from '../utils/imageUrl';
+
+const StudentPhotoCard = ({ photo, badge }) => {
+  const [hasError, setHasError] = useState(false);
+  const [useFallbackCdn, setUseFallbackCdn] = useState(false);
+
+  const primaryUrl = resolveImageUrl(photo);
+  const cdnUrl = resolveCdnThumbnailUrl(photo.driveFileId);
+  const downloadUrl = resolveImageUrl(photo, true);
+
+  const handleImageError = (e) => {
+    if (!useFallbackCdn && photo.driveFileId) {
+      setUseFallbackCdn(true);
+    } else {
+      setHasError(true);
+    }
+  };
+
+  const bgImage = hasError 
+    ? 'none' 
+    : `url(${useFallbackCdn && cdnUrl ? cdnUrl : primaryUrl})`;
+
+  return (
+    <figure 
+      className={`gallery-card ${photo.style}`} 
+      style={{ 
+        backgroundImage: bgImage, 
+        backgroundSize: 'cover', 
+        backgroundPosition: 'center',
+        position: 'relative',
+        background: hasError ? 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)' : undefined
+      }}
+    >
+      <img 
+        src={useFallbackCdn && cdnUrl ? cdnUrl : primaryUrl} 
+        alt="" 
+        style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0 }}
+        onError={handleImageError}
+      />
+      <div className="image-grain"></div>
+      {badge && (
+        <div style={{
+          position: 'absolute', top: '8px', right: '8px',
+          background: `rgba(${badge.color === '#f0a830' ? '240, 168, 48' : '117, 219, 166'}, 0.9)`, color: '#111',
+          fontSize: '8px', padding: '2px 6px', borderRadius: '3px',
+          fontWeight: 'bold', letterSpacing: '0.5px',
+        }}>
+          {badge.label}
+        </div>
+      )}
+      <figcaption>
+        <span>{photo.Path}</span>
+        <strong>
+          {photo.Size ? `${(photo.Size / 1024 / 1024).toFixed(1)} MB` : (badge ? badge.label : 'READY')}
+        </strong>
+        <a href={downloadUrl} download style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#333', border: '1px solid #444', borderRadius: '50%', width: '28px', height: '28px', color: '#fff', cursor: 'pointer' }}>
+          <Download size={14} />
+        </a>
+      </figcaption>
+    </figure>
+  );
+};
 
 export default function StudentPortal() {
   const { token } = useParams();
@@ -19,7 +81,7 @@ export default function StudentPortal() {
     fetchData();
 
     // Connect to Socket.IO for real-time updates
-    const socket = io(window.location.origin);
+    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -202,29 +264,7 @@ export default function StudentPortal() {
     document.body.removeChild(link);
   };
 
-  // Determine image source based on availability
-  const getImageSrc = (photo) => {
-    const refreshParam = photo._refreshKey ? `?t=${photo._refreshKey}` : '';
-    return `/api/drive/${token}/photo/${photo.Path}${refreshParam}`;
-  };
-
-  // Image error handler — retry with preview endpoint or show placeholder
-  const handleImageError = (e, photo) => {
-    const img = e.target;
-    if (img.dataset.retried) return; // Don't loop
-    img.dataset.retried = 'true';
-    
-    // Try the preview endpoint directly if we have an upload ID
-    if (photo._upload_id) {
-      img.src = `/api/drive/${token}/preview/${photo._upload_id}`;
-    } else {
-      // Show a gradient placeholder instead of broken icon
-      img.style.display = 'none';
-      if (img.parentElement) {
-        img.parentElement.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
-      }
-    }
-  };
+  // Functions getImageSrc and handleImageError have been moved into StudentPhotoCard
 
   // Get sync status info for a photo
   const getSyncBadge = (photo) => {
@@ -294,61 +334,7 @@ export default function StudentPortal() {
         <div className="photo-grid">
           {photos.map((p, i) => {
             const badge = getSyncBadge(p);
-            return (
-              <figure 
-                key={p._upload_id || p.Path || i} 
-                className={`gallery-card ${p.style}`} 
-                style={{ 
-                  backgroundImage: `url(${getImageSrc(p)})`, 
-                  backgroundSize: 'cover', 
-                  backgroundPosition: 'center',
-                  position: 'relative',
-                }}
-              >
-                {/* Hidden img for error handling — triggers fallback on load failure */}
-                <img 
-                  src={getImageSrc(p)} 
-                  alt="" 
-                  style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0 }}
-                  onError={(e) => {
-                    // Update the figure background on error
-                    const figure = e.target.closest('figure');
-                    if (figure && !e.target.dataset.retried) {
-                      e.target.dataset.retried = 'true';
-                      if (p._upload_id) {
-                        const fallbackSrc = `/api/drive/${token}/preview/${p._upload_id}`;
-                        figure.style.backgroundImage = `url(${fallbackSrc})`;
-                      } else {
-                        figure.style.backgroundImage = 'none';
-                        figure.style.background = 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)';
-                      }
-                    }
-                  }}
-                />
-                <div className="image-grain"></div>
-                {/* Sync badge — informational only, never blocks the image */}
-                {badge && (
-                  <div style={{
-                    position: 'absolute', top: '8px', right: '8px',
-                    background: `rgba(${badge.color === '#f0a830' ? '240, 168, 48' : '117, 219, 166'}, 0.9)`, color: '#111',
-                    fontSize: '8px', padding: '2px 6px', borderRadius: '3px',
-                    fontWeight: 'bold', letterSpacing: '0.5px',
-                  }}>
-                    {badge.label}
-                  </div>
-                )}
-                <figcaption>
-                  <span>{p.Path}</span>
-                  <strong>
-                    {p.Size ? `${(p.Size / 1024 / 1024).toFixed(1)} MB` : (badge ? badge.label : 'READY')}
-                  </strong>
-                  {/* Download button — ALWAYS AVAILABLE, never disabled */}
-                  <button onClick={() => handleDownloadSingle(p)}>
-                    <Download size={14} />
-                  </button>
-                </figcaption>
-              </figure>
-            );
+            return <StudentPhotoCard key={p._upload_id || p.Path || i} photo={p} badge={badge} />;
           })}
         </div>
       </main>

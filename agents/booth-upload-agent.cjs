@@ -1,7 +1,7 @@
 /* Watches a tethered-camera folder, then routes each image through RClone. */
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { spawn, execSync } = require('node:child_process');
 const chokidar = require('chokidar');
 
 const configPath = process.env.GRADSYNC_AGENT_CONFIG || path.join(__dirname, 'camera-agent.config.json');
@@ -87,10 +87,24 @@ async function processQueue() {
       // Execute rclone for this student
       await runRclone(job.filePath, intent.rcloneDestination);
       
+      let driveFileId = null;
+      try {
+        if (!config.dryRun) {
+          const fullDest = `${config.rcloneRemote}${intent.rcloneDestination}/${job.filename}`;
+          const output = execSync(`rclone lsjson "${fullDest}"`).toString();
+          const fileInfo = JSON.parse(output);
+          if (fileInfo && fileInfo.length > 0 && fileInfo[0].ID) {
+            driveFileId = fileInfo[0].ID;
+          }
+        }
+      } catch (err) {
+        console.warn(`Failed to retrieve Drive File ID: ${err.message}`);
+      }
+
       // Mark as completed
       await api(`/api/uploads/${intent.uploadId}/completed`, { 
         method: 'POST', 
-        body: JSON.stringify({ completed: true }) 
+        body: JSON.stringify({ completed: true, driveFileId }) 
       });
       console.log(`Uploaded ${job.filename} for ${student.student_id} (Booth)`);
     }

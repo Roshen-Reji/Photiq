@@ -206,6 +206,21 @@ async function processQueue() {
     console.log(`[Upload] Uploading original: ${job.filename}...`);
     await runRclone(job.filePath, job.rcloneDestination);
 
+    let driveFileId = null;
+    try {
+      if (!config.dryRun) {
+        const fullDest = `${config.rcloneRemote}${job.rcloneDestination}/${job.filename}`;
+        const output = execSync(`rclone lsjson "${fullDest}"`).toString();
+        const fileInfo = JSON.parse(output);
+        if (fileInfo && fileInfo.length > 0 && fileInfo[0].ID) {
+          driveFileId = fileInfo[0].ID;
+          console.log(`[Upload] Retrieved Google Drive File ID: ${driveFileId}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[Upload] Failed to retrieve Drive File ID: ${err.message}`);
+    }
+
     // 5. Report progress: 100%
     try {
       await api(`/api/uploads/${job.uploadId}/progress`, {
@@ -217,7 +232,7 @@ async function processQueue() {
     // 6. Mark as completed
     await api(`/api/uploads/${job.uploadId}/completed`, { 
       method: 'POST', 
-      body: JSON.stringify({ completed: true }) 
+      body: JSON.stringify({ completed: true, driveFileId }) 
     });
     
     console.log(`[Complete] Uploaded ${job.filename} as UNASSIGNED`);

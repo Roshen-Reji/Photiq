@@ -21,6 +21,8 @@ const uploadSchema = new mongoose.Schema({
   upload_progress: { type: Number, default: 0, min: 0, max: 100 },
   retry_count: { type: Number, default: 0 },
   last_error: { type: String },
+  driveFileId: { type: String, index: true },
+  cdnUrl: { type: String },
 }, { timestamps: true });
 
 // Index for fast lookups by student_id and status

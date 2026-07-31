@@ -1,4 +1,5 @@
 const express = require('express');
+const axios = require('axios');
 const router = express.Router();
 const path = require('node:path');
 const fs = require('node:fs');
@@ -126,7 +127,7 @@ router.patch('/:id/progress', async (req, res) => {
 // The agent confirms upload completion
 router.post('/:id/completed', async (req, res) => {
   try {
-    const { completed, error } = req.body;
+    const { completed, error, driveFileId } = req.body;
     
     const upload = await Upload.findById(req.params.id);
     if (!upload) return res.status(404).json({ error: 'Upload intent not found' });
@@ -134,6 +135,7 @@ router.post('/:id/completed', async (req, res) => {
     upload.status = completed ? 'completed' : 'failed';
     upload.original_ready = !!completed;
     upload.upload_progress = completed ? 100 : upload.upload_progress;
+    if (driveFileId) upload.driveFileId = driveFileId;
     if (error) {
       upload.error_log = error;
       upload.last_error = error;
@@ -238,39 +240,79 @@ function tryServeLocalFile(localPath, res) {
   return false;
 }
 
-// Stream a photo by upload ID — LOCAL FIRST, then preview, then Drive
+// Stream a photo by upload ID — DIRECT FROM GOOGLE DRIVE (Proxy)
 router.get('/stream/:id', async (req, res) => {
   try {
-    const upload = await Upload.findById(req.params.id);
-    if (!upload) return res.status(404).send('Not found');
+    const { id } = req.params;
+    const { download } = req.query;
 
-    // 1. LOCAL FIRST: Try serving from local disk
-    if (upload.localPath && tryServeLocalFile(upload.localPath, res)) {
+    let upload = await Upload.findById(id).catch(() => null);
+    if (!upload) {
+      upload = await Upload.findOne({ driveFileId: id });
+    }
+
+    // 1. LOCAL FIRST: Try serving from local disk (if it happens to be there)
+    if (upload && upload.localPath && tryServeLocalFile(upload.localPath, res)) {
       return;
     }
 
-    // 2. PREVIEW FALLBACK: Serve the preview if available
-    if (upload.preview_base64) {
-      const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=3600');
-      res.setHeader('Content-Length', imgBuffer.length);
-      res.send(imgBuffer);
-      return;
+    if (!upload || !upload.driveFileId) {
+      // PREVIEW FALLBACK if no driveFileId but preview exists
+      if (upload && upload.preview_base64) {
+        const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
+        res.setHeader('Content-Type', 'image/jpeg');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.setHeader('Content-Length', imgBuffer.length);
+        res.send(imgBuffer);
+        return;
+      }
+      return res.status(404).json({ error: 'Image file ID not found in database.' });
     }
 
-    // 3. DRIVE FALLBACK: Stream from rclone if available
-    if (upload.rclone_path) {
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      rclone.streamPhotoByPath(upload.rclone_path, res);
-      return;
+    const driveFileId = upload.driveFileId;
+    const driveApiUrl = `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`;
+
+    const driveResponse = await axios({
+      method: 'GET',
+      url: driveApiUrl,
+      responseType: 'stream',
+      headers: {
+        Authorization: `Bearer ${process.env.GOOGLE_DRIVE_ACCESS_TOKEN || ''}`,
+      },
+      maxRedirects: 5,
+      validateStatus: (status) => status >= 200 && status < 400,
+    });
+
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Content-Type', upload.mimeType || 'image/jpeg');
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable'); // 7 days
+
+    if (download === 'true') {
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${upload.originalName || upload.filename || 'photo.jpg'}"`
+      );
+    } else {
+      res.setHeader('Content-Disposition', 'inline');
     }
 
-    res.status(404).send('No image available');
+    driveResponse.data.pipe(res);
+
+    driveResponse.data.on('error', (streamErr) => {
+      console.error('Stream transmission error:', streamErr);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    });
   } catch (err) {
-    console.error('Stream error:', err);
-    if (!res.headersSent) res.status(500).send(err.message);
+    console.error('Backend proxy stream failure:', err.message);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: 'Failed to stream image from storage provider.',
+        details: err.response?.statusText || err.message,
+      });
+    }
   }
 });
 
