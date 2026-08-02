@@ -1,5 +1,7 @@
 const { spawn, execSync } = require('node:child_process');
 
+const RCLONE_LIST_TIMEOUT_MS = Number(process.env.GRADSYNC_RCLONE_LIST_TIMEOUT_MS || 15000);
+
 class RCloneService {
   constructor() {
     this.remote = process.env.GRADSYNC_RCLONE_REMOTE || 'drive:';
@@ -96,29 +98,38 @@ class RCloneService {
       }
       const folderName = this.getFolderName(student);
       const destination = `${this.remote}/${folderName}`;
-      
-      const child = spawn('rclone', ['lsjson', destination], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+      const child = spawn('rclone', ['lsjson', destination, '--contimeout', '10s', '--timeout', '30s', '--retries', '1'], { stdio: ['ignore', 'pipe', 'pipe'] });
       let output = '';
-      
+      let settled = false;
+      const finish = (files) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve(files);
+      };
+      const timeout = setTimeout(() => {
+        console.error(`[RClone listStudentPhotos Error]: timed out after ${RCLONE_LIST_TIMEOUT_MS}ms`);
+        child.kill();
+        finish([]);
+      }, RCLONE_LIST_TIMEOUT_MS);
+
       child.stdout.on('data', (data) => output += data.toString());
-      
-      // Handle spawn errors (e.g. rclone not found) gracefully
       child.on('error', (err) => {
         console.error(`[RClone listStudentPhotos Error]: ${err.message}`);
-        resolve([]);
+        finish([]);
       });
 
       child.on('exit', (code) => {
         if (code === 0) {
           try {
             const files = JSON.parse(output);
-            resolve(files.filter(f => !f.IsDir));
+            finish(files.filter(f => !f.IsDir));
           } catch(e) {
-            resolve([]);
+            finish([]);
           }
         } else {
-          // If folder doesn't exist, rclone might exit with error, just return empty
-          resolve([]);
+          finish([]);
         }
       });
     });
@@ -157,19 +168,19 @@ class RCloneService {
       
       if (this.dryRun) {
         console.log(`[RClone Dry Run] moveto "${src}" "${dest}"`);
-        return resolve();
+        return resolve(true);
       }
       
       const child = spawn('rclone', ['moveto', src, dest], { stdio: 'pipe' });
       child.on('error', (err) => {
         console.error(`[RClone moveFile Error]: ${err.message}`);
-        resolve(); // Don't crash
+        resolve(false);
       });
       child.on('exit', (code) => {
-        if (code === 0) resolve();
+        if (code === 0) resolve(true);
         else {
           console.error(`RClone moveto failed with code ${code}`);
-          resolve(); // Don't crash
+          resolve(false);
         }
       });
     });

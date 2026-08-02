@@ -4,45 +4,37 @@ import { Download, Share2, Grid, RefreshCw } from 'lucide-react';
 import { io } from 'socket.io-client';
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
-import { resolveImageUrl, resolveCdnThumbnailUrl } from '../utils/imageUrl';
+import { resolveImageUrl } from '../utils/imageUrl';
 
 const StudentPhotoCard = ({ photo, badge }) => {
   const [hasError, setHasError] = useState(false);
-  const [useFallbackCdn, setUseFallbackCdn] = useState(false);
 
-  const primaryUrl = resolveImageUrl(photo);
-  const cdnUrl = resolveCdnThumbnailUrl(photo.driveFileId);
+  const imageUrl = resolveImageUrl(photo);
   const downloadUrl = resolveImageUrl(photo, true);
 
-  const handleImageError = (e) => {
-    if (!useFallbackCdn && photo.driveFileId) {
-      setUseFallbackCdn(true);
-    } else {
-      setHasError(true);
-    }
-  };
+  const handleImageError = () => setHasError(true);
 
   const bgImage = hasError 
     ? 'none' 
-    : `url(${useFallbackCdn && cdnUrl ? cdnUrl : primaryUrl})`;
+    : `url(${imageUrl})`;
 
   return (
     <figure 
       className={`gallery-card ${photo.style}`} 
       style={{ 
-        backgroundImage: bgImage, 
-        backgroundSize: 'cover', 
-        backgroundPosition: 'center',
         position: 'relative',
-        background: hasError ? 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)' : undefined
+        overflow: 'hidden',
+        background: hasError ? 'linear-gradient(135deg, #2a2d2a 0%, #1a1c1a 100%)' : '#1a1c1a'
       }}
     >
-      <img 
-        src={useFallbackCdn && cdnUrl ? cdnUrl : primaryUrl} 
-        alt="" 
-        style={{ position: 'absolute', width: '1px', height: '1px', opacity: 0 }}
-        onError={handleImageError}
-      />
+      {!hasError && imageUrl && (
+        <img 
+          src={imageUrl}
+          alt={photo.filename || photo.Path || 'Graduation Photo'} 
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+          onError={handleImageError}
+        />
+      )}
       <div className="image-grain"></div>
       {badge && (
         <div style={{
@@ -55,9 +47,9 @@ const StudentPhotoCard = ({ photo, badge }) => {
         </div>
       )}
       <figcaption>
-        <span>{photo.Path}</span>
+        <span>{photo.filename || photo.Path}</span>
         <strong>
-          {photo.Size ? `${(photo.Size / 1024 / 1024).toFixed(1)} MB` : (badge ? badge.label : 'READY')}
+          {photo.size ? `${(photo.size / 1024 / 1024).toFixed(1)} MB` : (badge ? badge.label : 'READY')}
         </strong>
         <a href={downloadUrl} download style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#333', border: '1px solid #444', borderRadius: '50%', width: '28px', height: '28px', color: '#fff', cursor: 'pointer' }}>
           <Download size={14} />
@@ -98,14 +90,7 @@ export default function StudentPortal() {
     });
 
     // Listen for original ready — swap preview with original
-    socket.on('original_ready', (data) => {
-      setPhotos(prev => prev.map(p => {
-        if (p._upload_id === data._id || p._upload_id?.toString() === data._id?.toString()) {
-          return { ...p, _original_ready: true, _status: 'completed', _refreshKey: Date.now() };
-        }
-        return p;
-      }));
-    });
+    socket.on('original_ready', () => fetchPhotos());
 
     // Listen for photo assigned to this student
     socket.on('photo_assigned', (upload) => {
@@ -142,28 +127,7 @@ export default function StudentPortal() {
     // Re-register handlers with studentInfo context
     const handlePreview = (data) => {
       if (data.student_id === studentInfo.student_id) {
-        setPhotos(prev => {
-          const exists = prev.find(p => p._upload_id === data._id || p._upload_id?.toString() === data._id?.toString());
-          if (exists) {
-            return prev.map(p => 
-              (p._upload_id === data._id || p._upload_id?.toString() === data._id?.toString())
-                ? { ...p, _status: 'preview_ready', _preview_ready: true }
-                : p
-            );
-          }
-          // Add new photo entry
-          return [...prev, {
-            Path: data.filename,
-            Name: data.filename,
-            Size: 0,
-            _upload_id: data._id,
-            _status: 'preview_ready',
-            _preview_ready: true,
-            _original_ready: false,
-            _source: 'preview',
-            style: getPhotoStyle(prev.length),
-          }];
-        });
+        fetchPhotos();
         addToast('New photo available!', 'success');
       }
     };
@@ -253,28 +217,15 @@ export default function StudentPortal() {
   };
 
   // Download single photo — always works, falls back to preview if original not ready
-  const handleDownloadSingle = (photo) => {
-    const link = document.createElement('a');
-    // Drive photo endpoint is public (secured by token) and handles local-first fallback
-    link.href = `/api/drive/${token}/photo/${photo.Path}`;
-    link.download = photo.Path || photo.Name || 'photo.jpg';
-    link.target = '_blank';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-  };
-
-  // Functions getImageSrc and handleImageError have been moved into StudentPhotoCard
-
   // Get sync status info for a photo
   const getSyncBadge = (photo) => {
-    if (photo._status === 'completed' || photo._original_ready || photo._source === 'drive') {
+    if (photo.status === 'completed' || photo.original_ready || photo.source === 'drive') {
       return null; // Fully synced, no badge needed
     }
-    if (photo._status === 'uploading_original') {
+    if (photo.status === 'uploading_original') {
       return { label: 'CLOUD SYNCING', color: '#f0a830' };
     }
-    if (photo._source === 'preview' && !photo._original_ready) {
+    if (photo.source === 'preview' && !photo.original_ready) {
       return { label: 'PREVIEW', color: '#f0a830' };
     }
     return null;
@@ -334,7 +285,7 @@ export default function StudentPortal() {
         <div className="photo-grid">
           {photos.map((p, i) => {
             const badge = getSyncBadge(p);
-            return <StudentPhotoCard key={p._upload_id || p.Path || i} photo={p} badge={badge} />;
+            return <StudentPhotoCard key={p.id || p.filename || p.Path || i} photo={p} badge={badge} />;
           })}
         </div>
       </main>

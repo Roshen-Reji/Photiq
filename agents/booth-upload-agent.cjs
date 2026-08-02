@@ -1,7 +1,7 @@
 /* Watches a tethered-camera folder, then routes each image through RClone. */
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const { spawn, execSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const chokidar = require('chokidar');
 
 const configPath = process.env.GRADSYNC_AGENT_CONFIG || path.join(__dirname, 'camera-agent.config.json');
@@ -41,6 +41,22 @@ async function api(endpoint, options = {}) {
   return payload;
 }
 
+async function generatePreview(filePath) {
+  try {
+    const ext = path.extname(filePath).toLowerCase();
+    const supportedFormats = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+    if (supportedFormats.has(ext)) {
+      const fileBuffer = await fs.readFile(filePath);
+      if (fileBuffer.length <= 8 * 1024 * 1024) {
+        return fileBuffer.toString('base64');
+      }
+    }
+    return null;
+  } catch (err) {
+    return null;
+  }
+}
+
 function runRclone(sourcePath, destination) {
   if (config.dryRun) {
     console.log(`[dry run] rclone copyto "${sourcePath}" "${config.rcloneRemote}${destination}"`);
@@ -71,6 +87,8 @@ async function processQueue() {
       throw new Error('No active students have been scanned at the booth.');
     }
     
+    const previewBase64 = await generatePreview(job.filePath);
+
     // 2. Execute upload intent for each student in the booth
     for (const student of activeStudents) {
       const intent = await api('/api/uploads/intent', { 
@@ -80,31 +98,17 @@ async function processQueue() {
           source: 'booth', 
           filename: job.filename, 
           camera: config.cameraName || 'BOOTH_CAM_1', 
-          localPath: job.filePath 
+          previewBase64: previewBase64 || undefined,
         }) 
       });
       
       // Execute rclone for this student
       await runRclone(job.filePath, intent.rcloneDestination);
       
-      let driveFileId = null;
-      try {
-        if (!config.dryRun) {
-          const fullDest = `${config.rcloneRemote}${intent.rcloneDestination}/${job.filename}`;
-          const output = execSync(`rclone lsjson "${fullDest}"`).toString();
-          const fileInfo = JSON.parse(output);
-          if (fileInfo && fileInfo.length > 0 && fileInfo[0].ID) {
-            driveFileId = fileInfo[0].ID;
-          }
-        }
-      } catch (err) {
-        console.warn(`Failed to retrieve Drive File ID: ${err.message}`);
-      }
-
       // Mark as completed
       await api(`/api/uploads/${intent.uploadId}/completed`, { 
         method: 'POST', 
-        body: JSON.stringify({ completed: true, driveFileId }) 
+        body: JSON.stringify({ completed: true })
       });
       console.log(`Uploaded ${job.filename} for ${student.student_id} (Booth)`);
     }

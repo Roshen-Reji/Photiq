@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { randomUUID } = require('node:crypto');
 
 const uploadSchema = new mongoose.Schema({
   student_id: { type: String, required: true },
@@ -11,9 +12,7 @@ const uploadSchema = new mongoose.Schema({
     enum: ['pending', 'preview_uploading', 'preview_ready', 'uploading_original', 'completed', 'failed', 'retrying']
   },
   rclone_path: { type: String },
-  localPath: { type: String }, // Absolute path to local file on disk (local-first serving)
   error_log: { type: String },
-  drive_url: { type: String },
   // Preview image support (Fix 1 & 2)
   preview_base64: { type: String }, // Small compressed JPEG preview as base64
   preview_ready: { type: Boolean, default: false },
@@ -21,8 +20,10 @@ const uploadSchema = new mongoose.Schema({
   upload_progress: { type: Number, default: 0, min: 0, max: 100 },
   retry_count: { type: Number, default: 0 },
   last_error: { type: String },
+  // Opaque ID exposed to browsers instead of MongoDB or Google Drive identifiers.
+  public_id: { type: String, unique: true, sparse: true, default: () => randomUUID() },
+  // Legacy/server-only metadata. It is never serialized to a browser.
   driveFileId: { type: String, index: true },
-  cdnUrl: { type: String },
 }, { timestamps: true });
 
 // Index for fast lookups by student_id and status

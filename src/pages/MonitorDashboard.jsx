@@ -144,14 +144,14 @@ export default function MonitorDashboard() {
     });
 
     socket.on('photo_assigned', (photo) => {
-      setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p._id !== photo._id) : []);
+      setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p.id !== photo.id) : []);
     });
 
     // When rclone finishes uploading, force the thumbnail to re-render
     socket.on('photo_upload_complete', (photo) => {
       setUnassignedPhotos(prev => 
         Array.isArray(prev) 
-          ? prev.map(p => p._id === photo._id ? { ...photo, _refreshKey: Date.now() } : p) 
+          ? prev.map(p => p.id === photo.id ? { ...photo, _refreshKey: Date.now() } : p)
           : []
       );
     });
@@ -160,9 +160,9 @@ export default function MonitorDashboard() {
     socket.on('preview_ready', (data) => {
       setUnassignedPhotos(prev => {
         if (!Array.isArray(prev)) return [data];
-        const existing = prev.find(p => p._id === data._id);
+        const existing = prev.find(p => p.id === data.id);
         if (existing) {
-          return prev.map(p => p._id === data._id ? { ...p, ...data, status: 'preview_ready', preview_ready: true } : p);
+          return prev.map(p => p.id === data.id ? { ...p, ...data, status: 'preview_ready', preview_ready: true } : p);
         }
         return prev;
       });
@@ -172,7 +172,7 @@ export default function MonitorDashboard() {
     socket.on('upload_progress', (data) => {
       setUnassignedPhotos(prev =>
         Array.isArray(prev)
-          ? prev.map(p => p._id === data._id ? { ...p, upload_progress: data.upload_progress, status: data.status } : p)
+          ? prev.map(p => p.id === data.id ? { ...p, upload_progress: data.upload_progress, status: data.status } : p)
           : []
       );
     });
@@ -181,7 +181,7 @@ export default function MonitorDashboard() {
     socket.on('original_ready', (data) => {
       setUnassignedPhotos(prev =>
         Array.isArray(prev)
-          ? prev.map(p => p._id === data._id ? { ...p, status: 'completed', original_ready: true, _refreshKey: Date.now() } : p)
+          ? prev.map(p => p.id === data.id ? { ...p, status: 'completed', original_ready: true, _refreshKey: Date.now() } : p)
           : []
       );
     });
@@ -319,7 +319,7 @@ export default function MonitorDashboard() {
 
   // Drag and Drop Handlers for Photos
   const handlePhotoDragStart = (e, photo) => {
-    e.dataTransfer.setData('photo_id', photo._id);
+    e.dataTransfer.setData('photo_id', photo.id);
     e.dataTransfer.effectAllowed = 'move';
   };
 
@@ -341,7 +341,7 @@ export default function MonitorDashboard() {
       return;
     }
     
-    setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p._id !== photoId) : []);
+    setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p.id !== photoId) : []);
     
     try {
       const res = await fetch(`/api/uploads/${photoId}/assign`, {
@@ -610,7 +610,7 @@ export default function MonitorDashboard() {
               ) : (
                 unassignedPhotos.map(photo => (
                   <div 
-                    key={photo._id} 
+                    key={photo.id}
                     className="incoming-photo-card"
                     draggable
                     onDragStart={(e) => handlePhotoDragStart(e, photo)}

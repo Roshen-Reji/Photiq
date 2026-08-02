@@ -17,6 +17,7 @@ const boothRoute = require('./routes/booth.cjs');
 const driveRoute = require('./routes/drive.cjs');
 const authRoute = require('./routes/auth.cjs');
 const requireAuth = require('./middleware/auth.cjs');
+const { ensurePublicIds, presentUpload } = require('./services/uploadPresentation.cjs');
 
 const port = Number(process.env.PORT || 8787);
 const rcloneRemote = process.env.GRADSYNC_RCLONE_REMOTE || '';
@@ -93,11 +94,12 @@ io.on('connection', (socket) => {
       socket.emit('state_update', activeStudent);
 
       // Also send recent unassigned photos for immediate monitor display
-      const unassigned = await Upload.find(
-        { student_id: 'UNASSIGNED' },
-        { preview_base64: 0 }
-      ).sort({ createdAt: -1 }).limit(50).lean();
-      socket.emit('unassigned_photos_sync', unassigned);
+      const unassigned = await Upload.find({ student_id: 'UNASSIGNED' })
+        .sort({ createdAt: -1 })
+        .limit(50)
+        .lean();
+      await ensurePublicIds(Upload, unassigned);
+      socket.emit('unassigned_photos_sync', unassigned.map((upload) => presentUpload(upload)));
 
     } catch (err) {
       console.error('Socket state fetch error:', err);
