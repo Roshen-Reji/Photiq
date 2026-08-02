@@ -6,6 +6,7 @@ import { io } from 'socket.io-client';
 import { Upload, Plus, Trash2, Edit2, Server, Search, Camera, CameraOff, Link2, Home, ExternalLink } from 'lucide-react';
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
+import { getBackendOrigin } from '../utils/backendUrl';
 
 export default function AdminDashboard() {
   const [students, setStudents] = useState([]);
@@ -31,7 +32,7 @@ export default function AdminDashboard() {
     fetchStudents();
 
     // Socket.IO real-time sync (Fix 3)
-    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
+    const socket = io(getBackendOrigin());
     socket.on('student_added', (student) => {
       setStudents(prev => [...prev, student]);
     });

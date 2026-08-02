@@ -1,36 +1,38 @@
 const express = require('express');
-const axios = require('axios');
 const router = express.Router();
-const path = require('node:path');
-const fs = require('node:fs');
 const Upload = require('../models/Upload.cjs');
 const Student = require('../models/Student.cjs');
 const rclone = require('../controllers/rclone.cjs');
+const { ensurePublicIds, presentUpload } = require('../services/uploadPresentation.cjs');
+const { streamUploadImage } = require('../services/imageProxy.cjs');
 
-// Normalize paths: always use forward slashes
-function normalizePath(p) {
-  if (!p) return p;
-  return p.replace(/\\/g, '/');
+async function presentUploads(uploads) {
+  await ensurePublicIds(Upload, uploads);
+  return uploads.map((upload) => presentUpload(upload));
 }
 
-// The agent requests an upload intent
+async function presentSingleUpload(upload) {
+  if (!upload) return null;
+  await ensurePublicIds(Upload, [upload]);
+  return presentUpload(upload);
+}
+
+// The agent requests an upload intent. Its local file path stays in the agent's
+// durable queue; storing it in the shared database would make image delivery
+// depend on the photographer's computer.
 router.post('/intent', async (req, res) => {
   try {
-    const { studentId, source, filename, camera, localPath, previewBase64 } = req.body;
+    const { studentId, source, filename, camera, previewBase64 } = req.body;
 
     if (!studentId || !filename) {
       return res.status(400).json({ error: 'Missing studentId or filename' });
     }
 
     let rcloneDestination = '/GradSync/Incoming';
-
     if (studentId !== 'UNASSIGNED') {
       const student = await Student.findOne({ student_id: studentId });
-      if (!student) {
-        return res.status(404).json({ error: 'Student not found' });
-      }
-      const folderName = rclone.getFolderName(student);
-      rcloneDestination = `/${folderName}`;
+      if (!student) return res.status(404).json({ error: 'Student not found' });
+      rcloneDestination = `/${rclone.getFolderName(student)}`;
     }
 
     const upload = new Upload({
@@ -39,14 +41,12 @@ router.post('/intent', async (req, res) => {
       source: source || 'stage',
       camera_id: camera || 'unknown',
       rclone_path: `${rcloneDestination}/${filename}`,
-      localPath: normalizePath(localPath) || null, // Store normalized local path
       status: previewBase64 ? 'preview_ready' : 'pending',
       preview_base64: previewBase64 || null,
-      preview_ready: !!previewBase64,
+      preview_ready: Boolean(previewBase64),
       original_ready: false,
       upload_progress: 0,
     });
-
     await upload.save();
 
     const io = req.app.get('io');
@@ -54,47 +54,23 @@ router.post('/intent', async (req, res) => {
       io.emit('agent_status', {
         id: camera || 'STAGE_CAM_A',
         time: new Date().toLocaleTimeString(),
-        file: filename
+        file: filename,
       });
 
-      // Emit preview_ready immediately so monitor/portal see the thumbnail instantly
-      if (previewBase64) {
-        io.emit('preview_ready', {
-          _id: upload._id,
-          student_id: upload.student_id,
-          filename: upload.filename,
-          status: 'preview_ready',
-          preview_base64: previewBase64,
-          createdAt: upload.createdAt,
-        });
-      }
-
-      // Emit immediately so the monitor incoming feed updates live
-      if (studentId === 'UNASSIGNED') {
-        io.emit('new_unassigned_photo', {
-          _id: upload._id,
-          student_id: upload.student_id,
-          filename: upload.filename,
-          status: upload.status,
-          preview_ready: upload.preview_ready,
-          preview_base64: previewBase64 || null,
-          createdAt: upload.createdAt,
-        });
-      }
+      const clientUpload = await presentSingleUpload(upload);
+      if (previewBase64) io.emit('preview_ready', clientUpload);
+      if (studentId === 'UNASSIGNED') io.emit('new_unassigned_photo', clientUpload);
     }
 
-    // Return immediately — never wait for cloud operations
-    res.json({
-      uploadId: upload._id,
-      rcloneDestination
-    });
+    // uploadId is intentionally agent-only; browsers receive public_id instead.
+    res.json({ uploadId: upload._id, rcloneDestination });
   } catch (err) {
     console.error('Upload intent error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Agent reports upload progress
+// Agent reports upload progress using its private MongoDB upload ID.
 router.patch('/:id/progress', async (req, res) => {
   try {
     const { progress, status } = req.body;
@@ -103,20 +79,10 @@ router.patch('/:id/progress', async (req, res) => {
 
     if (typeof progress === 'number') upload.upload_progress = Math.min(100, Math.max(0, progress));
     if (status) upload.status = status;
-
     await upload.save();
 
     const io = req.app.get('io');
-    if (io) {
-      io.emit('upload_progress', {
-        _id: upload._id,
-        student_id: upload.student_id,
-        filename: upload.filename,
-        upload_progress: upload.upload_progress,
-        status: upload.status,
-      });
-    }
-
+    if (io) io.emit('upload_progress', await presentSingleUpload(upload));
     res.json({ ok: true });
   } catch (err) {
     console.error('Upload progress error:', err);
@@ -124,23 +90,22 @@ router.patch('/:id/progress', async (req, res) => {
   }
 });
 
-// The agent confirms upload completion
+// The agent confirms the rclone upload is complete. A Drive file ID may be
+// retained server-side for diagnostics, but delivery never depends on it.
 router.post('/:id/completed', async (req, res) => {
   try {
     const { completed, error, driveFileId } = req.body;
-    
     const upload = await Upload.findById(req.params.id);
     if (!upload) return res.status(404).json({ error: 'Upload intent not found' });
 
     upload.status = completed ? 'completed' : 'failed';
-    upload.original_ready = !!completed;
+    upload.original_ready = Boolean(completed);
     upload.upload_progress = completed ? 100 : upload.upload_progress;
     if (driveFileId) upload.driveFileId = driveFileId;
     if (error) {
       upload.error_log = error;
       upload.last_error = error;
     }
-    
     await upload.save();
 
     const io = req.app.get('io');
@@ -148,274 +113,125 @@ router.post('/:id/completed', async (req, res) => {
       io.emit('system_log', {
         time: new Date().toLocaleTimeString(),
         level: completed ? 'ok' : 'warn',
-        message: completed ? `FILE SYNCED: ${upload.filename}` : `SYNC FAILED: ${upload.filename}`
+        message: completed ? `FILE SYNCED: ${upload.filename}` : `SYNC FAILED: ${upload.filename}`,
       });
 
-      // Emit original_ready so portals can swap preview with full-res
-      if (completed) {
-        io.emit('original_ready', {
-          _id: upload._id,
-          student_id: upload.student_id,
-          filename: upload.filename,
-          status: 'completed',
-          original_ready: true,
-        });
-      }
-
-      // Notify monitor to refresh the thumbnail now that file is on Drive
+      const clientUpload = await presentSingleUpload(upload);
+      if (completed) io.emit('original_ready', clientUpload);
       if (completed && upload.student_id === 'UNASSIGNED') {
-        io.emit('photo_upload_complete', upload);
+        io.emit('photo_upload_complete', clientUpload);
       }
-
-      // Notify student portals
       if (completed && upload.student_id !== 'UNASSIGNED') {
         io.emit('photos_updated', {
           student_id: upload.student_id,
-          upload_id: upload._id,
           filename: upload.filename,
         });
       }
     }
 
-    res.json(upload);
+    res.json({ ok: true });
   } catch (err) {
     console.error('Upload completed error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get all unassigned photos
+// Admin/monitor list. The response deliberately contains only opaque IDs and
+// proxy URLs, never local file paths or provider identifiers.
 router.get('/unassigned', async (req, res) => {
   try {
-    const unassigned = await Upload.find(
-      { student_id: 'UNASSIGNED' },
-      { preview_base64: 0 } // Exclude large base64 from list queries for performance
-    ).sort({ createdAt: -1 }).lean();
-    res.json(unassigned);
+    const uploads = await Upload.find({ student_id: 'UNASSIGNED' })
+      .sort({ createdAt: -1 })
+      .lean();
+    res.json(await presentUploads(uploads));
   } catch (err) {
     console.error('Unassigned fetch error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get preview image for an upload
-router.get('/preview/:id', async (req, res) => {
+// Admin/monitor proxy. It resolves an opaque public ID on the server and uses
+// server-side rclone credentials to stream the remote object.
+router.get('/stream/:publicId', async (req, res) => {
   try {
-    const upload = await Upload.findById(req.params.id, { preview_base64: 1, preview_ready: 1 }).lean();
-    if (!upload || !upload.preview_base64) {
-      return res.status(404).send('Preview not available');
-    }
+    const upload = await Upload.findOne({ public_id: req.params.publicId });
+    streamUploadImage(upload, res, { rclone, download: req.query.download === 'true' });
+  } catch (err) {
+    console.error('Photo proxy failure:', err);
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to stream photo from server storage.' });
+  }
+});
 
-    // Decode base64 and send as JPEG
-    const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
-    res.setHeader('Content-Type', 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.setHeader('Content-Length', imgBuffer.length);
-    res.send(imgBuffer);
+// Kept as a named preview endpoint for compatibility, but it now accepts only
+// an opaque ID and never reads a local camera path.
+router.get('/preview/:publicId', async (req, res) => {
+  try {
+    const upload = await Upload.findOne({ public_id: req.params.publicId });
+    if (!upload?.preview_base64) return res.status(404).send('Preview not available');
+    streamUploadImage({ ...upload.toObject(), original_ready: false, status: 'preview_ready' }, res, { rclone });
   } catch (err) {
     console.error('Preview fetch error:', err);
-    res.status(500).send(err.message);
+    if (!res.headersSent) res.status(500).send('Preview unavailable');
   }
 });
 
-// Helper: try to serve a local file, returns true if successful
-function tryServeLocalFile(localPath, res) {
-  if (!localPath) return false;
-  const normalized = normalizePath(localPath);
+router.get('/download/:publicId', async (req, res) => {
   try {
-    if (fs.existsSync(normalized)) {
-      const ext = path.extname(normalized).toLowerCase();
-      const isPng = ext === '.png';
-      res.setHeader('Content-Type', isPng ? 'image/png' : 'image/jpeg');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-      const stat = fs.statSync(normalized);
-      res.setHeader('Content-Length', stat.size);
-      fs.createReadStream(normalized).pipe(res);
-      return true;
-    }
-  } catch (err) {
-    console.error(`Local file serve error for ${normalized}: ${err.message}`);
-  }
-  return false;
-}
-
-// Stream a photo by upload ID — DIRECT FROM GOOGLE DRIVE (Proxy)
-router.get('/stream/:id', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { download } = req.query;
-
-    let upload = await Upload.findById(id).catch(() => null);
-    if (!upload) {
-      upload = await Upload.findOne({ driveFileId: id });
-    }
-
-    // 1. LOCAL FIRST: Try serving from local disk (if it happens to be there)
-    if (upload && upload.localPath && tryServeLocalFile(upload.localPath, res)) {
-      return;
-    }
-
-    if (!upload || !upload.driveFileId) {
-      // PREVIEW FALLBACK if no driveFileId but preview exists
-      if (upload && upload.preview_base64) {
-        const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
-        res.setHeader('Content-Type', 'image/jpeg');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        res.setHeader('Content-Length', imgBuffer.length);
-        res.send(imgBuffer);
-        return;
-      }
-      return res.status(404).json({ error: 'Image file ID not found in database.' });
-    }
-
-    const driveFileId = upload.driveFileId;
-    const driveApiUrl = `https://www.googleapis.com/drive/v3/files/${driveFileId}?alt=media`;
-
-    const driveResponse = await axios({
-      method: 'GET',
-      url: driveApiUrl,
-      responseType: 'stream',
-      headers: {
-        Authorization: `Bearer ${process.env.GOOGLE_DRIVE_ACCESS_TOKEN || ''}`,
-      },
-      maxRedirects: 5,
-      validateStatus: (status) => status >= 200 && status < 400,
-    });
-
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-    res.setHeader('Content-Type', upload.mimeType || 'image/jpeg');
-    res.setHeader('Cache-Control', 'public, max-age=604800, immutable'); // 7 days
-
-    if (download === 'true') {
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${upload.originalName || upload.filename || 'photo.jpg'}"`
-      );
-    } else {
-      res.setHeader('Content-Disposition', 'inline');
-    }
-
-    driveResponse.data.pipe(res);
-
-    driveResponse.data.on('error', (streamErr) => {
-      console.error('Stream transmission error:', streamErr);
-      if (!res.headersSent) {
-        res.status(500).end();
-      }
-    });
-  } catch (err) {
-    console.error('Backend proxy stream failure:', err.message);
-    if (!res.headersSent) {
-      res.status(500).json({
-        error: 'Failed to stream image from storage provider.',
-        details: err.response?.statusText || err.message,
-      });
-    }
-  }
-});
-
-// Download a photo by upload ID — LOCAL FIRST with attachment header
-router.get('/download/:id', async (req, res) => {
-  try {
-    const upload = await Upload.findById(req.params.id);
-    if (!upload) return res.status(404).send('Not found');
-
-    res.setHeader('Content-Disposition', `attachment; filename="${upload.filename}"`);
-
-    // 1. LOCAL FIRST
-    if (upload.localPath) {
-      const normalized = normalizePath(upload.localPath);
-      try {
-        if (fs.existsSync(normalized)) {
-          const ext = path.extname(normalized).toLowerCase();
-          res.setHeader('Content-Type', ext === '.png' ? 'image/png' : 'image/jpeg');
-          const stat = fs.statSync(normalized);
-          res.setHeader('Content-Length', stat.size);
-          fs.createReadStream(normalized).pipe(res);
-          return;
-        }
-      } catch (e) { /* fall through */ }
-    }
-
-    // 2. PREVIEW FALLBACK
-    if (upload.preview_base64) {
-      const imgBuffer = Buffer.from(upload.preview_base64, 'base64');
-      res.setHeader('Content-Type', 'image/jpeg');
-      res.setHeader('Content-Length', imgBuffer.length);
-      res.send(imgBuffer);
-      return;
-    }
-
-    // 3. DRIVE FALLBACK
-    if (upload.rclone_path) {
-      res.setHeader('Content-Type', 'image/jpeg');
-      rclone.streamPhotoByPath(upload.rclone_path, res);
-      return;
-    }
-
-    res.status(404).send('No image available for download');
+    const upload = await Upload.findOne({ public_id: req.params.publicId });
+    streamUploadImage(upload, res, { rclone, download: true });
   } catch (err) {
     console.error('Download error:', err);
-    if (!res.headersSent) res.status(500).send(err.message);
+    if (!res.headersSent) res.status(500).send('Download unavailable');
   }
 });
 
-// Get uploads for a specific student (used by student portal for instant display)
 router.get('/student/:studentId', async (req, res) => {
   try {
-    const uploads = await Upload.find(
-      { student_id: req.params.studentId, status: { $in: ['preview_ready', 'uploading_original', 'completed'] } },
-      { preview_base64: 0 } // Exclude large base64 for list queries
-    ).sort({ createdAt: -1 }).lean();
-    res.json(uploads);
+    const uploads = await Upload.find({
+      student_id: req.params.studentId,
+      status: { $in: ['preview_ready', 'uploading_original', 'completed'] },
+    }).sort({ createdAt: -1 }).lean();
+    res.json(await presentUploads(uploads));
   } catch (err) {
     console.error('Student uploads fetch error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// Assign photo to a student
-router.post('/:id/assign', async (req, res) => {
+// Move an incoming photo before changing the database path. This prevents the
+// portal from pointing at the destination before storage has finished moving.
+router.post('/:publicId/assign', async (req, res) => {
   try {
     const { studentId } = req.body;
-    const upload = await Upload.findById(req.params.id);
-    
+    const upload = await Upload.findOne({ public_id: req.params.publicId });
     if (!upload) return res.status(404).json({ error: 'Upload not found' });
     if (upload.student_id !== 'UNASSIGNED') return res.status(400).json({ error: 'Already assigned' });
-    
+
     const student = await Student.findOne({ student_id: studentId });
     if (!student) return res.status(404).json({ error: 'Student not found' });
-    
-    const folderName = rclone.getFolderName(student);
-    const newRclonePath = `/${folderName}/${upload.filename}`;
-    
-    // Move on remote using rclone (non-blocking — don't fail the assignment if move fails)
-    rclone.moveFile(upload.rclone_path, newRclonePath).catch(err => {
-      console.error('RClone move failed (non-critical):', err.message);
-    });
-    
+
+    const newRclonePath = `/${rclone.getFolderName(student)}/${upload.filename}`;
+    const moved = await rclone.moveFile(upload.rclone_path, newRclonePath);
+    if (!moved) {
+      return res.status(502).json({ error: 'Could not move the photo into the student gallery. Please retry.' });
+    }
+
     upload.student_id = studentId;
     upload.rclone_path = newRclonePath;
     await upload.save();
-    
+
     const io = req.app.get('io');
     if (io) {
       io.emit('system_log', {
         time: new Date().toLocaleTimeString(),
         level: 'ok',
-        message: `ASSIGNED: ${upload.filename} to ${student.name}`
+        message: `ASSIGNED: ${upload.filename} to ${student.name}`,
       });
-      io.emit('photo_assigned', upload);
-      io.emit('photos_updated', {
-        student_id: studentId,
-        upload_id: upload._id,
-        filename: upload.filename,
-      });
+      io.emit('photo_assigned', await presentSingleUpload(upload));
+      io.emit('photos_updated', { student_id: studentId, filename: upload.filename });
     }
-    
-    res.json(upload);
+
+    res.json(await presentSingleUpload(upload));
   } catch (err) {
     console.error('Photo assign error:', err);
     res.status(500).json({ error: err.message });

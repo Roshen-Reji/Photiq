@@ -2,7 +2,7 @@
 const fs = require('node:fs/promises');
 const fsp = require('node:fs');
 const path = require('node:path');
-const { spawn, execSync } = require('node:child_process');
+const { spawn } = require('node:child_process');
 const chokidar = require('chokidar');
 
 const configPath = process.env.GRADSYNC_AGENT_CONFIG || path.join(__dirname, 'camera-agent.config.json');
@@ -48,29 +48,20 @@ async function api(endpoint, options = {}) {
   return payload;
 }
 
-// Generate a compressed JPEG preview as base64 (Fix 1 & 2)
+// Generate a clean, valid preview as base64 for images
 async function generatePreview(filePath) {
   try {
     const ext = path.extname(filePath).toLowerCase();
+    const supportedFormats = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
     
-    // For JPEG files, read and create a smaller version
-    if (ext === '.jpg' || ext === '.jpeg') {
+    if (supportedFormats.has(ext)) {
       const fileBuffer = await fs.readFile(filePath);
-      
-      // If file is under 200KB, use it directly as preview
-      if (fileBuffer.length < 200 * 1024) {
+      // Support files up to 8MB for instant base64 preview
+      if (fileBuffer.length <= 8 * 1024 * 1024) {
         return fileBuffer.toString('base64');
       }
-      
-      // For larger files, use a quality-reduced version
-      // We'll send the first 150KB of the JPEG as a reasonable preview
-      // (JPEG files are structured so partial data still renders)
-      const previewBuffer = fileBuffer.subarray(0, Math.min(fileBuffer.length, 150 * 1024));
-      return previewBuffer.toString('base64');
     }
     
-    // For RAW/PNG files, we can't easily compress without sharp/canvas
-    // Just send the filename info and let the UI show a placeholder
     return null;
   } catch (err) {
     console.error(`Preview generation failed for ${filePath}: ${err.message}`);
@@ -180,7 +171,6 @@ async function processQueue() {
           source: 'stage', 
           filename: job.filename, 
           camera: config.cameraName, 
-          localPath: job.filePath,
           previewBase64: previewBase64 || undefined,
         }) 
       });
@@ -206,21 +196,6 @@ async function processQueue() {
     console.log(`[Upload] Uploading original: ${job.filename}...`);
     await runRclone(job.filePath, job.rcloneDestination);
 
-    let driveFileId = null;
-    try {
-      if (!config.dryRun) {
-        const fullDest = `${config.rcloneRemote}${job.rcloneDestination}/${job.filename}`;
-        const output = execSync(`rclone lsjson "${fullDest}"`).toString();
-        const fileInfo = JSON.parse(output);
-        if (fileInfo && fileInfo.length > 0 && fileInfo[0].ID) {
-          driveFileId = fileInfo[0].ID;
-          console.log(`[Upload] Retrieved Google Drive File ID: ${driveFileId}`);
-        }
-      }
-    } catch (err) {
-      console.warn(`[Upload] Failed to retrieve Drive File ID: ${err.message}`);
-    }
-
     // 5. Report progress: 100%
     try {
       await api(`/api/uploads/${job.uploadId}/progress`, {
@@ -232,7 +207,7 @@ async function processQueue() {
     // 6. Mark as completed
     await api(`/api/uploads/${job.uploadId}/completed`, { 
       method: 'POST', 
-      body: JSON.stringify({ completed: true, driveFileId }) 
+      body: JSON.stringify({ completed: true })
     });
     
     console.log(`[Complete] Uploaded ${job.filename} as UNASSIGNED`);

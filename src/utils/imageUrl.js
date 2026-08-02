@@ -1,36 +1,43 @@
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || '';
+import { getBackendOrigin } from './backendUrl';
+
+const BACKEND_URL = getBackendOrigin(false);
+
+function withBackendOrigin(url) {
+  if (!url || /^https?:\/\//i.test(url)) return url;
+  return `${BACKEND_URL}${url}`;
+}
+
+function addQueryParameter(url, name, value) {
+  const separator = url.includes('?') ? '&' : '?';
+  return `${url}${separator}${encodeURIComponent(name)}=${encodeURIComponent(value)}`;
+}
 
 /**
- * Resolves any upload record into a reliable Express proxy URL.
- * Also supports Google's high-performance CDN fallback for public files.
- *
- * @param {Object|string} item - The Upload object from DB or file ID string
- * @param {boolean} [download=false] - Whether to trigger forced attachment download
- * @returns {string} Fully qualified proxy image URL
+ * Resolves only server-issued proxy URLs. Browser code must never construct a
+ * URL from a Drive ID, local path, Mongo ID, or object URL.
  */
 export const resolveImageUrl = (item, download = false) => {
-  if (!item) return '';
+  if (!item || typeof item !== 'object') return '';
 
-  const id = typeof item === 'string' ? item : item._id || item.id || item.driveFileId || (item.Path ? item._upload_id : null);
-  if (!id) return '';
+  let url = download ? (item.downloadUrl || item.imageUrl) : item.imageUrl;
+  if (!url) return '';
+  url = withBackendOrigin(url);
 
-  // If item explicitly provides an absolute API stream path already, use it
-  if (typeof item === 'object' && item.previewUrl && item.previewUrl.includes('/api/uploads/stream')) {
-    return download ? `${item.previewUrl}?download=true` : item.previewUrl;
+  if (download && !item.downloadUrl) {
+    url = addQueryParameter(url, 'download', 'true');
   }
 
-  // Construct standard backend stream URL
-  const queryParam = download ? '?download=true' : '';
-  const token = localStorage.getItem('gradsync_admin_token');
-  const tokenParam = token ? (queryParam ? `&token=${token}` : `?token=${token}`) : '';
-  
-  return `${BACKEND_URL}/api/uploads/stream/${id}${queryParam}${tokenParam}`;
-};
+  // Bust browser cache if a refresh key is provided (e.g., when original finishes uploading)
+  if (item._refreshKey) {
+    url = addQueryParameter(url, 't', item._refreshKey);
+  }
 
-/**
- * Fast Google CDN thumbnail fallback (only works if Drive permissions are 'Anyone with link')
- */
-export const resolveCdnThumbnailUrl = (driveFileId, size = 1000) => {
-  if (!driveFileId) return '';
-  return `https://lh3.googleusercontent.com/d/${driveFileId}=w${size}?authuser=0`;
+  // Monitor/admin image routes require the existing admin session. Student
+  // routes are secured by their QR token and deliberately receive no admin JWT.
+  if (/\/api\/uploads(?:\/|$)/.test(url) && !/[?&]token=/.test(url)) {
+    const token = localStorage.getItem('gradsync_admin_token');
+    if (token) url = addQueryParameter(url, 'token', token);
+  }
+
+  return url;
 };

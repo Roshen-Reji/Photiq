@@ -10,8 +10,10 @@
     "local": "concurrently -k -n api,web -c green,cyan \"npm run server\" \"npx wait-on tcp:8787 && npm run dev\"",
     "agent:camera": "node agents/camera-upload-agent.cjs",
     "setup:prod": "node scripts/setup.cjs",
+    "migrate:image-access": "node scripts/migrate-upload-image-access.cjs",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node --test"
   },
   "keywords": [],
   "author": "",
