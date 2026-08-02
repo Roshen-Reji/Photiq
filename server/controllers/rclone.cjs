@@ -164,6 +164,9 @@ class RCloneService {
       console.error(`[RClone streamPhoto Error]: ${err.message}`);
       if (!res.headersSent) res.status(500).send('Photo streaming failed — rclone error.');
     });
+    res.on('close', () => {
+      if (!child.killed) child.kill();
+    });
   }
 
   moveFile(srcPath, destPath) {
