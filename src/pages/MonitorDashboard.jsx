@@ -9,6 +9,7 @@ import {
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
 import { resolveImageUrl } from '../utils/imageUrl';
+import { getBackendOrigin } from '../utils/backendUrl';
 
 // Status badge colors
 const STATUS_COLORS = {
@@ -110,7 +111,7 @@ export default function MonitorDashboard() {
     // Auto-poll unassigned photos every 2500ms for automatic dashboard refresh
     pollIntervalRef.current = setInterval(fetchUnassigned, 2500);
 
-    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
+    const socket = io(getBackendOrigin());
     socketRef.current = socket;
     
     socket.on('connect', () => {

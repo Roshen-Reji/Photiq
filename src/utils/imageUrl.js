@@ -1,4 +1,6 @@
-const BACKEND_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/$/, '');
+import { getBackendOrigin } from './backendUrl';
+
+const BACKEND_URL = getBackendOrigin(false);
 
 function withBackendOrigin(url) {
   if (!url || /^https?:\/\//i.test(url)) return url;

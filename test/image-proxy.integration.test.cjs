@@ -63,7 +63,7 @@ test('a clean student request receives an image through an opaque proxy URL', as
 
   assert.equal(photos.length, 1);
   assert.equal(photos[0].id, storedUpload.public_id);
-  assert.match(photos[0].imageUrl, new RegExp(`/photo/${storedUpload.public_id}$`));
+  assert.match(photos[0].imageUrl, new RegExp(`/photo/${storedUpload.public_id}(\\?|$)`));
   assert.doesNotMatch(JSON.stringify(photos), /private-google-drive-file-id|D:\/camera|rclone_path|internal-mongo-id/);
 
   const imageResponse = await fetch(`${origin}${photos[0].imageUrl}`);

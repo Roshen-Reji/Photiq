@@ -4,19 +4,15 @@ import { Download, Share2, Grid, RefreshCw } from 'lucide-react';
 import { io } from 'socket.io-client';
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
-import { resolveImageUrl } from '../utils/imageUrl';
+import { getBackendOrigin } from '../utils/backendUrl';
 
 const StudentPhotoCard = ({ photo, badge }) => {
   const [hasError, setHasError] = useState(false);
 
-  const imageUrl = resolveImageUrl(photo);
-  const downloadUrl = resolveImageUrl(photo, true);
+  const imageUrl = photo.imageUrl;
+  const downloadUrl = photo.downloadUrl || photo.imageUrl;
 
   const handleImageError = () => setHasError(true);
-
-  const bgImage = hasError 
-    ? 'none' 
-    : `url(${imageUrl})`;
 
   return (
     <figure 
@@ -30,7 +26,7 @@ const StudentPhotoCard = ({ photo, badge }) => {
       {!hasError && imageUrl && (
         <img 
           src={imageUrl}
-          alt={photo.filename || photo.Path || 'Graduation Photo'} 
+          alt={photo.filename || 'Graduation Photo'} 
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
           onError={handleImageError}
         />
@@ -47,7 +43,7 @@ const StudentPhotoCard = ({ photo, badge }) => {
         </div>
       )}
       <figcaption>
-        <span>{photo.filename || photo.Path}</span>
+        <span>{photo.filename}</span>
         <strong>
           {photo.size ? `${(photo.size / 1024 / 1024).toFixed(1)} MB` : (badge ? badge.label : 'READY')}
         </strong>
@@ -73,7 +69,7 @@ export default function StudentPortal() {
     fetchData();
 
     // Connect to Socket.IO for real-time updates
-    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
+    const socket = io(getBackendOrigin());
     socketRef.current = socket;
 
     socket.on('connect', () => {
@@ -285,7 +281,7 @@ export default function StudentPortal() {
         <div className="photo-grid">
           {photos.map((p, i) => {
             const badge = getSyncBadge(p);
-            return <StudentPhotoCard key={p.id || p.filename || p.Path || i} photo={p} badge={badge} />;
+            return <StudentPhotoCard key={p.id || p.filename || p.Path || i} photo={p} token={token} badge={badge} />;
           })}
         </div>
       </main>

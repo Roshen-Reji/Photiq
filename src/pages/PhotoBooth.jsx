@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import jsQR from 'jsqr';
 import { Camera, X, Plus, Home } from 'lucide-react';
+import { getBackendOrigin } from '../utils/backendUrl';
 
 export default function PhotoBooth() {
   const videoRef = useRef(null);
@@ -20,7 +21,7 @@ export default function PhotoBooth() {
 
   useEffect(() => {
     // Connect to sockets to listen to the queue
-    const socket = io(import.meta.env.VITE_BACKEND_URL || window.location.origin);
+    const socket = io(getBackendOrigin());
     
     socket.on('connect', () => {
       setSocketConnected(true);

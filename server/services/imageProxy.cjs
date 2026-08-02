@@ -1,4 +1,5 @@
 const fs = require('node:fs');
+const path = require('node:path');
 
 function imageContentType(filename = '') {
   switch (path.extname(filename).toLowerCase()) {
