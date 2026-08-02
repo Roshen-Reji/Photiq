@@ -8,14 +8,19 @@ class RCloneService {
     this.baseFolder = process.env.GRADSYNC_BASE_FOLDER || 'GradSync';
     this.dryRun = process.env.GRADSYNC_RCLONE_DRY_RUN === 'true';
 
-    // Auto-detect if rclone is installed
+    // Auto-detect if rclone is installed AND configured
     if (!this.dryRun) {
       try {
         execSync('rclone version', { stdio: 'ignore', timeout: 5000 });
-        console.log('[RClone] rclone detected on system.');
+        const remotes = execSync('rclone listremotes', { timeout: 5000 }).toString();
+        if (remotes.includes(this.remote)) {
+          console.log(`[RClone] rclone detected and remote '${this.remote}' is configured.`);
+        } else {
+          console.warn(`[RClone] rclone is installed but remote '${this.remote}' is NOT configured. Auto-enabling dry-run mode.`);
+          this.dryRun = true;
+        }
       } catch (e) {
-        console.warn('[RClone] rclone is NOT installed or not in PATH. Auto-enabling dry-run mode.');
-        console.warn('[RClone] Install rclone (https://rclone.org/install/) to enable Google Drive sync.');
+        console.warn('[RClone] rclone is NOT installed or failed. Auto-enabling dry-run mode.');
         this.dryRun = true;
       }
     }
