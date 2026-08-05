@@ -73,6 +73,30 @@ function createDriveRouter({ StudentModel = DefaultStudent, UploadModel = Defaul
     }
   });
 
+  router.get('/:token/folder-link', async (req, res) => {
+    try {
+      const student = await findStudent(req.params.token);
+      if (!student) return res.status(404).json({ error: 'Student not found' });
+      
+      if (student.folder_id && student.folder_id.startsWith('http')) {
+        return res.json({ link: student.folder_id });
+      }
+
+      // Fetch from rclone and save
+      const link = await rcloneService.getFolderLink(student);
+      if (link) {
+        student.folder_id = link;
+        await student.save();
+        return res.json({ link });
+      }
+      
+      res.status(404).json({ error: 'Folder link not available' });
+    } catch (err) {
+      console.error('Folder link endpoint error:', err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // The browser gets only opaque IDs and token-scoped server proxy URLs. Raw
   // rclone/Drive metadata stays on this server.
   router.get('/:token/photos', async (req, res) => {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { Download, Share2, Grid, RefreshCw } from 'lucide-react';
+import { Download, Share2, Grid, RefreshCw, ExternalLink } from 'lucide-react';
 import { io } from 'socket.io-client';
 import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
@@ -71,6 +71,7 @@ export default function StudentPortal() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [socketConnected, setSocketConnected] = useState(false);
+  const [driveLink, setDriveLink] = useState(null);
   const socketRef = useRef(null);
   const studentInfoRef = useRef(null); // Ref to access latest studentInfo in socket handlers
   const { toasts, addToast, removeToast } = useToast();
@@ -125,6 +126,12 @@ export default function StudentPortal() {
       }));
       
       setPhotos(processed);
+      
+      // Fetch folder link asynchronously without blocking the photos render
+      fetch(`/api/drive/${token}/folder-link`)
+        .then(res => res.json())
+        .then(data => { if (data.link) setDriveLink(data.link); })
+        .catch(e => console.warn('Could not fetch drive link:', e));
     } catch (err) {
       setError(err.message);
       addToast(err.message, 'error');
@@ -239,6 +246,12 @@ export default function StudentPortal() {
             <p>Welcome to your personal graduation gallery. High-resolution downloads are included.</p>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-end' }}>
+            {driveLink && (
+              <a href={driveLink} target="_blank" rel="noopener noreferrer" className="download-all" style={{ background: '#4285F4', borderColor: '#4285F4', textDecoration: 'none' }}>
+                <ExternalLink size={12} />
+                OPEN IN DRIVE
+              </a>
+            )}
             <button className="download-all" onClick={handleDownloadAll} disabled={photos.length === 0 || loading}>
               <Download size={12} />
               DOWNLOAD ALL <span>(ZIP)</span>

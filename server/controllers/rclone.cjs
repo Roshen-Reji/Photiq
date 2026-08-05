@@ -108,6 +108,41 @@ class RCloneService {
     });
   }
 
+  getFolderLink(student) {
+    return new Promise((resolve) => {
+      if (this.dryRun) {
+        return resolve('https://drive.google.com/drive/folders/dummy_link');
+      }
+      
+      const folderName = this.getFolderName(student);
+      const destination = `${this.remote}/${folderName}`;
+      
+      console.log(`[RClone] Fetching link for: ${destination}`);
+      
+      const child = spawn('rclone', ['link', destination]);
+      let stdoutBuf = '';
+      let stderrBuf = '';
+      
+      child.stdout.on('data', (data) => { stdoutBuf += data.toString(); });
+      child.stderr.on('data', (data) => { stderrBuf += data.toString(); });
+      
+      child.on('error', (err) => {
+        console.error(`[RClone Link Error]: ${err.message}`);
+        resolve(null);
+      });
+      
+      child.on('exit', (code) => {
+        if (code === 0) {
+          const link = stdoutBuf.trim().split('\n').pop();
+          resolve(link || null);
+        } else {
+          console.error(`[RClone Link] Failed with code ${code}: ${stderrBuf}`);
+          resolve(null);
+        }
+      });
+    });
+  }
+
   listStudentPhotos(student) {
     return new Promise((resolve) => {
       if (this.dryRun) {
