@@ -6,11 +6,20 @@ import useToast from '../hooks/useToast';
 import ToastContainer from '../components/Toast';
 import { getBackendOrigin } from '../utils/backendUrl';
 
+const BACKEND_URL = getBackendOrigin(false);
+
+function withBackendOrigin(url) {
+  if (!url || /^https?:\/\//i.test(url)) return url;
+  return `${BACKEND_URL}${url}`;
+}
+
 const StudentPhotoCard = ({ photo, badge }) => {
   const [hasError, setHasError] = useState(false);
 
-  const imageUrl = photo.imageUrl;
-  const downloadUrl = photo.downloadUrl || photo.imageUrl;
+  // FIX: Resolve URLs through backend origin so they work with Vite dev proxy
+  // and when frontend/backend are on different ports/hosts
+  const imageUrl = withBackendOrigin(photo.imageUrl);
+  const downloadUrl = withBackendOrigin(photo.downloadUrl || photo.imageUrl);
 
   const handleImageError = () => setHasError(true);
 
@@ -63,96 +72,10 @@ export default function StudentPortal() {
   const [error, setError] = useState(null);
   const [socketConnected, setSocketConnected] = useState(false);
   const socketRef = useRef(null);
+  const studentInfoRef = useRef(null); // Ref to access latest studentInfo in socket handlers
   const { toasts, addToast, removeToast } = useToast();
 
-  useEffect(() => {
-    fetchData();
-
-    // Connect to Socket.IO for real-time updates
-    const socket = io(getBackendOrigin());
-    socketRef.current = socket;
-
-    socket.on('connect', () => {
-      setSocketConnected(true);
-    });
-
-    socket.on('disconnect', () => {
-      setSocketConnected(false);
-    });
-
-    // Listen for preview ready — new photo available instantly
-    socket.on('preview_ready', (data) => {
-      if (!studentInfo) return;
-    });
-
-    // Listen for original ready — swap preview with original
-    socket.on('original_ready', () => fetchPhotos());
-
-    // Listen for photo assigned to this student
-    socket.on('photo_assigned', (upload) => {
-      if (studentInfo && upload.student_id === studentInfo.student_id) {
-        fetchPhotos();
-      }
-    });
-
-    // Listen for photos_updated for this student
-    socket.on('photos_updated', (data) => {
-      if (studentInfo && data.student_id === studentInfo.student_id) {
-        fetchPhotos();
-      }
-    });
-
-    // Photo upload complete — refresh to get updated data
-    socket.on('photo_upload_complete', () => {
-      fetchPhotos();
-    });
-
-    return () => socket.disconnect();
-  }, [token]);
-
-  // Re-subscribe to relevant events when studentInfo becomes available
-  useEffect(() => {
-    if (!socketRef.current || !studentInfo) return;
-    const socket = socketRef.current;
-
-    // Join student-specific room for targeted updates
-    if (studentInfo.student_id) {
-      socket.emit('join_student_room', studentInfo.student_id);
-    }
-
-    // Re-register handlers with studentInfo context
-    const handlePreview = (data) => {
-      if (data.student_id === studentInfo.student_id) {
-        fetchPhotos();
-        addToast('New photo available!', 'success');
-      }
-    };
-
-    const handlePhotosUpdated = (data) => {
-      if (data.student_id === studentInfo.student_id) {
-        fetchPhotos();
-      }
-    };
-
-    const handleAssigned = (upload) => {
-      if (upload.student_id === studentInfo.student_id) {
-        fetchPhotos();
-      }
-    };
-
-    socket.on('preview_ready', handlePreview);
-    socket.on('photos_updated', handlePhotosUpdated);
-    socket.on('photo_assigned', handleAssigned);
-
-    return () => {
-      socket.off('preview_ready', handlePreview);
-      socket.off('photos_updated', handlePhotosUpdated);
-      socket.off('photo_assigned', handleAssigned);
-    };
-  }, [studentInfo]);
-
   const styles = ['gold tall', 'violet wide', 'coral', 'blue', 'forest tall', 'plum', 'sunset wide'];
-  
   const getPhotoStyle = (index) => styles[index % styles.length];
 
   const fetchPhotos = useCallback(async () => {
@@ -172,17 +95,19 @@ export default function StudentPortal() {
     }
   }, [token]);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
 
       // Fetch student basic info
+      let info = null;
       try {
         const infoRes = await fetch(`/api/drive/${token}/info`);
         if (infoRes.ok) {
-          const info = await infoRes.json();
+          info = await infoRes.json();
           setStudentInfo(info);
+          studentInfoRef.current = info;
         }
       } catch (e) {
         console.warn('Could not fetch student info:', e);
@@ -206,13 +131,81 @@ export default function StudentPortal() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [token, addToast]);
+
+  // FIX: Single useEffect for socket setup. All event handlers use
+  // studentInfoRef (a ref) instead of the stale studentInfo state from
+  // the first render. This eliminates the bug where handlers registered
+  // before studentInfo loaded would silently ignore all events.
+  useEffect(() => {
+    fetchData();
+
+    const socket = io(getBackendOrigin());
+    socketRef.current = socket;
+
+    socket.on('connect', () => {
+      setSocketConnected(true);
+    });
+
+    socket.on('disconnect', () => {
+      setSocketConnected(false);
+    });
+
+    // Listen for preview ready — check against ref for latest studentInfo
+    socket.on('preview_ready', (data) => {
+      const info = studentInfoRef.current;
+      if (info && data.student_id === info.student_id) {
+        fetchPhotos();
+        addToast('New photo available!', 'success');
+      }
+    });
+
+    // Listen for original ready — swap preview with original
+    socket.on('original_ready', (data) => {
+      const info = studentInfoRef.current;
+      // Only refetch if this is for our student or if it's a global update
+      if (!info || data.student_id === info.student_id) {
+        fetchPhotos();
+      }
+    });
+
+    // Listen for photo assigned to this student
+    socket.on('photo_assigned', (upload) => {
+      const info = studentInfoRef.current;
+      if (info && upload.student_id === info.student_id) {
+        fetchPhotos();
+      }
+    });
+
+    // Listen for photos_updated for this student
+    socket.on('photos_updated', (data) => {
+      const info = studentInfoRef.current;
+      if (info && data.student_id === info.student_id) {
+        fetchPhotos();
+      }
+    });
+
+    // FIX: Removed the indiscriminate photo_upload_complete listener that
+    // fetched all photos for every student on every upload. This caused
+    // unnecessary network traffic and was redundant with photos_updated.
+
+    return () => socket.disconnect();
+  }, [token, fetchPhotos, fetchData, addToast]);
+
+  // When studentInfo loads, join the student-specific socket room
+  useEffect(() => {
+    if (!socketRef.current || !studentInfo) return;
+    studentInfoRef.current = studentInfo;
+
+    if (studentInfo.student_id) {
+      socketRef.current.emit('join_student_room', studentInfo.student_id);
+    }
+  }, [studentInfo]);
 
   const handleDownloadAll = () => {
     window.location.href = `${window.location.origin}/api/drive/${token}/download`;
   };
 
-  // Download single photo — always works, falls back to preview if original not ready
   // Get sync status info for a photo
   const getSyncBadge = (photo) => {
     if (photo.status === 'completed' || photo.original_ready || photo.source === 'drive') {

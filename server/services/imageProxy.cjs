@@ -52,62 +52,84 @@ function sendPreview(upload, res, options) {
 }
 
 /**
- * Streams a photo with multi-tier fallbacks (RClone -> DB Preview -> Local Disk)
- * so image delivery never fails regardless of RClone or network state.
+ * Streams a photo with multi-tier fallbacks:
+ *   1. RClone cloud storage (original)
+ *   2. Stored base64 preview
+ *   3. Local disk
+ *   4. RClone retry (if first attempt was skipped due to status flags)
+ *
+ * Now async to properly await rclone results. If rclone fails, we can
+ * still fall back to preview/local instead of sending 0 bytes.
  */
-function streamUploadImage(upload, res, { rclone, download = false } = {}) {
+async function streamUploadImage(upload, res, { rclone, download = false } = {}) {
   if (!upload) {
     res.status(404).json({ error: 'Photo not found' });
     return;
   }
 
-  // 1. If RClone is online and not in dryRun mode, stream from RClone storage
+  // 1. If RClone is online and the original is available, try rclone first
   const originalIsAvailable = upload.original_ready || upload.status === 'completed';
   if (originalIsAvailable && upload.rclone_path && rclone && !rclone.dryRun) {
     applyImageHeaders(res, upload, { download, cacheControl: 'private, max-age=300' });
-    rclone.streamPhotoByPath(upload.rclone_path, res);
-    return;
+    const ok = await rclone.streamPhotoByPath(upload.rclone_path, res);
+    if (ok) return; // Successfully streamed from rclone
+
+    // Rclone failed — headers may or may not have been sent.
+    // If headers already sent (partial data), we can't switch to fallback.
+    if (res.headersSent) return;
   }
 
   // 2. Send stored base64 preview if available
   if (sendPreview(upload, res, { download })) return;
 
   // 3. Local disk fallbacks if file exists on local machine
-  const watchDir = process.env.GRADSYNC_WATCH_DIR || 'D:/Roshen/test';
+  const watchDir = process.env.GRADSYNC_WATCH_DIR || '';
   const possiblePaths = [
-    upload.rclone_path,
     path.join(__dirname, '..', '..', 'data', 'uploads', upload.filename),
-    path.join(watchDir, upload.filename),
+    watchDir ? path.join(watchDir, upload.filename) : null,
     path.join(process.cwd(), 'data', 'uploads', upload.filename),
   ].filter(Boolean);
 
   for (const p of possiblePaths) {
     if (fs.existsSync(p)) {
       try {
-        // Auto-heal missing preview_base64 in MongoDB for future instant loads
-        if (!upload.preview_base64) {
-          const buf = fs.readFileSync(p);
-          if (buf.length <= 8 * 1024 * 1024) {
-            const Upload = require('../models/Upload.cjs');
-            Upload.updateOne({ _id: upload._id }, { $set: { preview_base64: buf.toString('base64'), preview_ready: true } }).catch(() => {});
-          }
-        }
-      } catch (e) {}
+        const stat = fs.statSync(p);
+        if (stat.size === 0) continue; // Skip zero-byte files
 
-      applyImageHeaders(res, upload, { download, cacheControl: 'private, max-age=300' });
-      fs.createReadStream(p).pipe(res);
-      return;
+        // Auto-heal missing preview_base64 in MongoDB for future instant loads
+        if (!upload.preview_base64 && upload._id) {
+          try {
+            const buf = fs.readFileSync(p);
+            if (buf.length > 0 && buf.length <= 2 * 1024 * 1024) {
+              const Upload = require('../models/Upload.cjs');
+              Upload.updateOne(
+                { _id: upload._id },
+                { $set: { preview_base64: buf.toString('base64'), preview_ready: true } }
+              ).catch(() => {});
+            }
+          } catch (e) { /* ignore heal errors */ }
+        }
+
+        applyImageHeaders(res, upload, { download, cacheControl: 'private, max-age=300' });
+        fs.createReadStream(p).pipe(res);
+        return;
+      } catch (e) {
+        // File access error, try next
+      }
     }
   }
 
-  // 4. Try RClone as final fallback
-  if (upload.rclone_path && rclone && !rclone.dryRun) {
+  // 4. Try RClone as final fallback (for cases where original_ready was false but file might exist)
+  if (upload.rclone_path && rclone && !rclone.dryRun && !res.headersSent) {
     applyImageHeaders(res, upload, { download, cacheControl: 'private, max-age=300' });
-    rclone.streamPhotoByPath(upload.rclone_path, res);
-    return;
+    const ok = await rclone.streamPhotoByPath(upload.rclone_path, res);
+    if (ok) return;
+    if (res.headersSent) return;
   }
 
-  res.status(404).json({ error: 'Photo is not available from server storage yet.' });
+  if (!res.headersSent) {
+    res.status(404).json({ error: 'Photo is not available from server storage yet.' });
+  }
 }
 
 module.exports = {

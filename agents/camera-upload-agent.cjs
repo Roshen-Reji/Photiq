@@ -49,6 +49,11 @@ async function api(endpoint, options = {}) {
 }
 
 // Generate a clean, valid preview as base64 for images
+// Maximum preview size in bytes. Previews larger than this are skipped —
+// the monitor will load the image from rclone once the upload completes.
+// Previously 8MB, which caused MongoDB bloat and socket.io timeouts.
+const MAX_PREVIEW_BYTES = 500 * 1024; // 500KB
+
 async function generatePreview(filePath) {
   try {
     const ext = path.extname(filePath).toLowerCase();
@@ -56,10 +61,10 @@ async function generatePreview(filePath) {
     
     if (supportedFormats.has(ext)) {
       const fileBuffer = await fs.readFile(filePath);
-      // Support files up to 8MB for instant base64 preview
-      if (fileBuffer.length <= 8 * 1024 * 1024) {
+      if (fileBuffer.length <= MAX_PREVIEW_BYTES) {
         return fileBuffer.toString('base64');
       }
+      console.log(`[Preview] Skipping preview for ${path.basename(filePath)} — ${(fileBuffer.length / 1024).toFixed(0)}KB exceeds ${MAX_PREVIEW_BYTES / 1024}KB limit`);
     }
     
     return null;
