@@ -73,6 +73,8 @@ export default function MonitorDashboard() {
   const dragOverItem = useRef();
   const pollIntervalRef = useRef(null);
   const socketRef = useRef(null);
+  // FIX: Track photo IDs that are being assigned so the poll doesn't re-add them
+  const assigningPhotoIds = useRef(new Set());
 
   const getAuthHeaders = () => {
     const token = localStorage.getItem('gradsync_admin_token');
@@ -89,12 +91,17 @@ export default function MonitorDashboard() {
   }, [searchQuery]);
 
   // Fetch unassigned photos (used for initial load + polling)
+  // FIX: Filter out photos that are currently being assigned (in-flight)
+  // so the poll doesn't re-add them and cause the "snap-back" effect.
   const fetchUnassigned = useCallback(async () => {
     try {
       const res = await fetch('/api/uploads/unassigned', { headers: getAuthHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setUnassignedPhotos(Array.isArray(data) ? data : []);
+      const filtered = Array.isArray(data)
+        ? data.filter(p => !assigningPhotoIds.current.has(p.id))
+        : [];
+      setUnassignedPhotos(filtered);
     } catch (err) {
       console.error('Unassigned poll error:', err);
     }
@@ -231,7 +238,9 @@ export default function MonitorDashboard() {
 
     // Initial unassigned photos sync
     socket.on('unassigned_photos_sync', (photos) => {
-      if (Array.isArray(photos)) setUnassignedPhotos(photos);
+      if (Array.isArray(photos)) {
+        setUnassignedPhotos(photos.filter(p => !assigningPhotoIds.current.has(p.id)));
+      }
     });
 
     return () => {
@@ -345,6 +354,7 @@ export default function MonitorDashboard() {
 
   const handlePhotoDragOver = (e) => {
     e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
     setIsPhotoDraggingOver(true);
   };
 
@@ -352,6 +362,7 @@ export default function MonitorDashboard() {
     setIsPhotoDraggingOver(false);
   };
 
+  // FIX: Track the in-flight photo ID so the poll won't re-add it.
   const handlePhotoDrop = async (e) => {
     e.preventDefault();
     setIsPhotoDraggingOver(false);
@@ -361,6 +372,10 @@ export default function MonitorDashboard() {
       return;
     }
     
+    // Mark as in-flight BEFORE removing from state — this prevents the
+    // poll (which runs every 2.5s) from re-adding the photo while the
+    // assign API is still processing.
+    assigningPhotoIds.current.add(photoId);
     setUnassignedPhotos(prev => Array.isArray(prev) ? prev.filter(p => p.id !== photoId) : []);
     
     try {
@@ -376,12 +391,16 @@ export default function MonitorDashboard() {
       addToast(`Photo assigned to ${activeStudent.name}.`, 'success');
     } catch (err) {
       addToast(`Failed to assign photo: ${err.message}`, 'error');
-      // Refresh unassigned list
+      // Assignment failed — remove from in-flight set and re-fetch
+      assigningPhotoIds.current.delete(photoId);
       try {
         const res = await fetch('/api/uploads/unassigned', { headers: getAuthHeaders() });
         const data = await res.json();
         setUnassignedPhotos(Array.isArray(data) ? data : []);
       } catch (e) { /* ignore refresh failure */ }
+    } finally {
+      // Clean up in-flight tracking after a delay to cover any in-progress polls
+      setTimeout(() => assigningPhotoIds.current.delete(photoId), 5000);
     }
   };
 
