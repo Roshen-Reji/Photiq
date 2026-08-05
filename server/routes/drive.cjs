@@ -142,7 +142,7 @@ function createDriveRouter({ StudentModel = DefaultStudent, UploadModel = Defaul
         student_id: student.student_id,
         public_id: req.params.publicId,
       });
-      streamUploadImage(upload, res, {
+      await streamUploadImage(upload, res, {
         rclone: rcloneService,
         download: req.query.download === 'true',
       });
@@ -167,7 +167,7 @@ function createDriveRouter({ StudentModel = DefaultStudent, UploadModel = Defaul
         original_ready: true,
         status: 'completed',
       };
-      streamUploadImage(upload, res, {
+      await streamUploadImage(upload, res, {
         rclone: rcloneService,
         download: req.query.download === 'true',
       });
@@ -186,7 +186,7 @@ function createDriveRouter({ StudentModel = DefaultStudent, UploadModel = Defaul
         public_id: req.params.publicId,
       });
       if (!upload?.preview_base64) return res.status(404).send('Preview not available');
-      streamUploadImage({ ...upload.toObject(), original_ready: false, status: 'preview_ready' }, res, {
+      await streamUploadImage({ ...upload.toObject(), original_ready: false, status: 'preview_ready' }, res, {
         rclone: rcloneService,
       });
     } catch (err) {

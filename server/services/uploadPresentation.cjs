@@ -49,11 +49,21 @@ function buildImageUrl(upload, { studentToken } = {}) {
 function presentUpload(upload, options = {}) {
   const imageUrl = buildImageUrl(upload, options);
 
+  // Append a cache-buster so clients fetching the list will bypass the cached preview
   let finalImageUrl = imageUrl;
+  let cacheBuster = '';
   if (finalImageUrl && (upload.status === 'completed' || upload.original_ready)) {
-    // Append a cache-buster so clients fetching the list will bypass the cached preview
     const t = upload.updatedAt ? new Date(upload.updatedAt).getTime() : Date.now();
-    finalImageUrl = `${finalImageUrl}${finalImageUrl.includes('?') ? '&' : '?'}t=${t}`;
+    cacheBuster = `t=${t}`;
+    finalImageUrl = `${finalImageUrl}${finalImageUrl.includes('?') ? '&' : '?'}${cacheBuster}`;
+  }
+
+  // Build downloadUrl from the base imageUrl (not finalImageUrl) to avoid
+  // double-appending parameters. Add download=true first, then cache-buster.
+  let downloadUrl = null;
+  if (imageUrl) {
+    downloadUrl = `${imageUrl}${imageUrl.includes('?') ? '&' : '?'}download=true`;
+    if (cacheBuster) downloadUrl += `&${cacheBuster}`;
   }
 
   return {
@@ -67,7 +77,7 @@ function presentUpload(upload, options = {}) {
     upload_progress: typeof upload.upload_progress === 'number' ? upload.upload_progress : 0,
     createdAt: upload.createdAt,
     imageUrl: finalImageUrl,
-    downloadUrl: finalImageUrl ? `${finalImageUrl}${finalImageUrl.includes('?') ? '&' : '?'}download=true` : null,
+    downloadUrl,
   };
 }
 

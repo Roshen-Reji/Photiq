@@ -19,6 +19,13 @@ router.post('/active', async (req, res) => {
   try {
     const { studentId } = req.body;
     
+    // FIX: If this student is already active, skip redundant work
+    // (prevents duplicate folder creation and state thrashing from repeated clicks)
+    const currentActive = await Student.findOne({ status: 'active' });
+    if (currentActive && currentActive.student_id === studentId) {
+      return res.json(currentActive);
+    }
+    
     // Deactivate currently active
     await Student.updateMany({ status: 'active' }, { $set: { status: 'completed' } });
     

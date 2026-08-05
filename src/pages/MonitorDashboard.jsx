@@ -140,8 +140,22 @@ export default function MonitorDashboard() {
       setAgents(prev => ({ ...prev, [agent.id]: { ...agent, online: true, lastSeen: Date.now() } }));
     });
 
+    // FIX: Upsert logic — if a photo with this ID already exists (e.g. from
+    // polling), update it in-place. Otherwise prepend. This prevents the
+    // duplicate-then-vanish bug when new_unassigned_photo and the poll both
+    // fire for the same image.
     socket.on('new_unassigned_photo', (photo) => {
-      setUnassignedPhotos(prev => [photo, ...(Array.isArray(prev) ? prev : [])]);
+      setUnassignedPhotos(prev => {
+        if (!Array.isArray(prev)) return [photo];
+        const idx = prev.findIndex(p => p.id === photo.id);
+        if (idx !== -1) {
+          // Already exists (from poll or earlier event) — update in-place
+          const updated = [...prev];
+          updated[idx] = { ...prev[idx], ...photo };
+          return updated;
+        }
+        return [photo, ...prev];
+      });
     });
 
     socket.on('photo_assigned', (photo) => {
@@ -152,24 +166,29 @@ export default function MonitorDashboard() {
     socket.on('photo_upload_complete', (photo) => {
       setUnassignedPhotos(prev => 
         Array.isArray(prev) 
-          ? prev.map(p => p.id === photo.id ? { ...photo, _refreshKey: Date.now() } : p)
+          ? prev.map(p => p.id === photo.id ? { ...p, ...photo, _refreshKey: Date.now() } : p)
           : []
       );
     });
 
-    // Real-time preview ready (Fix 1 & 8)
+    // Real-time preview ready — update existing OR insert if somehow missing
     socket.on('preview_ready', (data) => {
       setUnassignedPhotos(prev => {
         if (!Array.isArray(prev)) return [data];
-        const existing = prev.find(p => p.id === data.id);
-        if (existing) {
-          return prev.map(p => p.id === data.id ? { ...p, ...data, status: 'preview_ready', preview_ready: true } : p);
+        const idx = prev.findIndex(p => p.id === data.id);
+        if (idx !== -1) {
+          const updated = [...prev];
+          updated[idx] = { ...prev[idx], ...data, status: 'preview_ready', preview_ready: true };
+          return updated;
         }
-        return prev;
+        // Not found — this can happen if the photo was assigned to a student
+        // (not UNASSIGNED). In that case, don't add it to unassigned list.
+        if (data.student_id && data.student_id !== 'UNASSIGNED') return prev;
+        return [data, ...prev];
       });
     });
 
-    // Upload progress tracking (Fix 8)
+    // Upload progress tracking
     socket.on('upload_progress', (data) => {
       setUnassignedPhotos(prev =>
         Array.isArray(prev)
@@ -178,11 +197,11 @@ export default function MonitorDashboard() {
       );
     });
 
-    // Original ready (Fix 8)
+    // Original ready — update status and bust the image cache
     socket.on('original_ready', (data) => {
       setUnassignedPhotos(prev =>
         Array.isArray(prev)
-          ? prev.map(p => p.id === data.id ? { ...p, status: 'completed', original_ready: true, _refreshKey: Date.now() } : p)
+          ? prev.map(p => p.id === data.id ? { ...p, ...data, status: 'completed', original_ready: true, _refreshKey: Date.now() } : p)
           : []
       );
     });

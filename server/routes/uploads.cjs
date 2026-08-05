@@ -28,7 +28,9 @@ router.post('/intent', async (req, res) => {
       return res.status(400).json({ error: 'Missing studentId or filename' });
     }
 
-    let rcloneDestination = '/GradSync/Incoming';
+    // Use rclone.baseFolder so the path stays consistent if the base folder
+    // config changes. Previously this was hardcoded to '/GradSync/Incoming'.
+    let rcloneDestination = `/${rclone.baseFolder}/Incoming`;
     if (studentId !== 'UNASSIGNED') {
       const student = await Student.findOne({ student_id: studentId });
       if (!student) return res.status(404).json({ error: 'Student not found' });
@@ -58,8 +60,18 @@ router.post('/intent', async (req, res) => {
       });
 
       const clientUpload = await presentSingleUpload(upload);
-      if (previewBase64) io.emit('preview_ready', clientUpload);
-      if (studentId === 'UNASSIGNED') io.emit('new_unassigned_photo', clientUpload);
+
+      // FIX: For UNASSIGNED photos, emit ONLY `new_unassigned_photo`.
+      // Previously we emitted both `preview_ready` AND `new_unassigned_photo`,
+      // causing duplicate entries on the monitor (the preview_ready handler
+      // couldn't find the item to update since new_unassigned_photo already
+      // added it with a slightly different shape).
+      if (studentId === 'UNASSIGNED') {
+        io.emit('new_unassigned_photo', clientUpload);
+      } else if (previewBase64) {
+        // For assigned photos, emit preview_ready so the student portal updates
+        io.emit('preview_ready', clientUpload);
+      }
     }
 
     // uploadId is intentionally agent-only; browsers receive public_id instead.
@@ -155,7 +167,7 @@ router.get('/unassigned', async (req, res) => {
 router.get('/stream/:publicId', async (req, res) => {
   try {
     const upload = await Upload.findOne({ public_id: req.params.publicId });
-    streamUploadImage(upload, res, { rclone, download: req.query.download === 'true' });
+    await streamUploadImage(upload, res, { rclone, download: req.query.download === 'true' });
   } catch (err) {
     console.error('Photo proxy failure:', err);
     if (!res.headersSent) res.status(500).json({ error: 'Failed to stream photo from server storage.' });
@@ -168,7 +180,7 @@ router.get('/preview/:publicId', async (req, res) => {
   try {
     const upload = await Upload.findOne({ public_id: req.params.publicId });
     if (!upload?.preview_base64) return res.status(404).send('Preview not available');
-    streamUploadImage({ ...upload.toObject(), original_ready: false, status: 'preview_ready' }, res, { rclone });
+    await streamUploadImage({ ...upload.toObject(), original_ready: false, status: 'preview_ready' }, res, { rclone });
   } catch (err) {
     console.error('Preview fetch error:', err);
     if (!res.headersSent) res.status(500).send('Preview unavailable');
@@ -178,7 +190,7 @@ router.get('/preview/:publicId', async (req, res) => {
 router.get('/download/:publicId', async (req, res) => {
   try {
     const upload = await Upload.findOne({ public_id: req.params.publicId });
-    streamUploadImage(upload, res, { rclone, download: true });
+    await streamUploadImage(upload, res, { rclone, download: true });
   } catch (err) {
     console.error('Download error:', err);
     if (!res.headersSent) res.status(500).send('Download unavailable');
@@ -211,9 +223,17 @@ router.post('/:publicId/assign', async (req, res) => {
     if (!student) return res.status(404).json({ error: 'Student not found' });
 
     const newRclonePath = `/${rclone.getFolderName(student)}/${upload.filename}`;
-    const moved = await rclone.moveFile(upload.rclone_path, newRclonePath);
-    if (!moved) {
-      return res.status(502).json({ error: 'Could not move the photo into the student gallery. Please retry.' });
+
+    // Attempt to move the file in cloud storage. If the file hasn't finished
+    // uploading to the Incoming folder yet (or rclone is in dry-run), we still
+    // update the database path so the portal can serve the preview. The
+    // original will become available once the agent finishes uploading.
+    let moved = false;
+    if (upload.original_ready || upload.status === 'completed') {
+      moved = await rclone.moveFile(upload.rclone_path, newRclonePath);
+      if (!moved && !rclone.dryRun) {
+        console.warn(`[Assign] rclone move failed for ${upload.filename}, updating DB path anyway`);
+      }
     }
 
     upload.student_id = studentId;
